@@ -135,6 +135,14 @@ if not DEVELOPMENT_MODE:
     # Show logout button if authenticated
     if st.session_state.authenticated:
         st.sidebar.success(f"Welcome {st.session_state.username}")
+        
+        # Add mobile view toggle
+        st.sidebar.markdown("### Display Settings")
+        mobile_view = st.sidebar.checkbox("Mobile-friendly view", value=st.session_state.get('mobile_view', False))
+        if mobile_view != st.session_state.get('mobile_view', False):
+            st.session_state.mobile_view = mobile_view
+            st.rerun()
+        
         if st.sidebar.button("Logout"):
             st.session_state.authenticated = False
             st.session_state.username = None
@@ -162,11 +170,94 @@ st.markdown("""
         border-radius: 0.5rem;
         margin: 1rem 0;
     }
+    
+    /* Responsive design improvements */
+    /* Make tables horizontally scrollable on small screens */
+    .stDataFrame, .stTable {
+        overflow-x: auto;
+    }
+    
+    /* Adjust font sizes for mobile */
+    @media screen and (max-width: 640px) {
+        .stDataFrame table, .stTable table {
+            font-size: 12px;
+        }
+        
+        h1 {
+            font-size: 1.5rem !important;
+        }
+        
+        h2 {
+            font-size: 1.3rem !important;
+        }
+        
+        h3 {
+            font-size: 1.1rem !important;
+        }
+        
+        .stButton button {
+            font-size: 0.8rem;
+            padding: 0.3rem 0.5rem;
+        }
+        
+        /* Reduce padding on mobile */
+        .block-container {
+            padding-left: 0.5rem;
+            padding-right: 0.5rem;
+        }
+    }
+    
+    /* Tablet adjustments */
+    @media screen and (min-width: 641px) and (max-width: 1024px) {
+        .stDataFrame table, .stTable table {
+            font-size: 14px;
+        }
+    }
+    
+    /* Ensure buttons and interactive elements are touch-friendly */
+    button, select, .stSelectbox, .stMultiselect {
+        min-height: 36px;
+    }
 </style>
 """, unsafe_allow_html=True)
 
 # App title
 st.title("⚽ MyBetBuddy - Football Match Predictions")
+
+# Add device detection
+st.markdown("""
+<script>
+    // Device detection
+    document.addEventListener('DOMContentLoaded', function() {
+        const width = window.innerWidth;
+        const isMobile = width <= 640;
+        const isTablet = width > 640 && width <= 1024;
+        
+        // Send the device type to Streamlit
+        if (isMobile) {
+            window.parent.postMessage({
+                type: 'streamlit:setComponentValue',
+                value: 'mobile'
+            }, '*');
+        } else if (isTablet) {
+            window.parent.postMessage({
+                type: 'streamlit:setComponentValue',
+                value: 'tablet'
+            }, '*');
+        } else {
+            window.parent.postMessage({
+                type: 'streamlit:setComponentValue',
+                value: 'desktop'
+            }, '*');
+        }
+    });
+</script>
+""", unsafe_allow_html=True)
+
+# Initialize device type in session state
+if 'device_type' not in st.session_state:
+    st.session_state.device_type = 'desktop'
+    st.session_state.mobile_view = False
 
 # Create a layout with two columns for the title area
 title_col1, title_col2 = st.columns([3, 1])
@@ -274,7 +365,7 @@ if standings:
             tab_col1, tab_col2 = st.columns([1.4, 1.6])  # Reduced standings width by 30% and increased fixtures width
 
             with tab_col1:
-                # Change from st.markdown to st.subheader to match fixtures table
+                # Add subheader for standings
                 st.subheader(f"{league} Standings")
                 
                 # Create a DataFrame for the current league standings
@@ -290,9 +381,13 @@ if standings:
                 standings_df = standings_df.sort_values(by='Position')
 
                 # Create display columns in exact order with Position first
-                display_columns = ['Position', 'Team', 'Played', 'Won', 'Drawn', 'Lost', 'For', 'Against', 'Points', 'Goal Difference', 'Form']
+                # For mobile, show fewer columns
+                if st.session_state.get('mobile_view', False):
+                    display_columns = ['Position', 'Team', 'Played', 'Points', 'Form']
+                else:
+                    display_columns = ['Position', 'Team', 'Played', 'Won', 'Drawn', 'Lost', 'For', 'Against', 'Points', 'Goal Difference', 'Form']
                 
-                # Display the standings table with consistent styling
+                # Display the standings table with reduced width
                 st.dataframe(
                     standings_df[display_columns],
                     hide_index=True,
