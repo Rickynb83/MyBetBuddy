@@ -4,4 +4,5 @@ requests
 python-dotenv
 xlsxwriter
 streamlit-authenticator==0.4.2
-pyyaml 
+pyyaml
+scipy 
