@@ -2,4 +2,6 @@ streamlit
 pandas
 requests
 python-dotenv
-xlsxwriter 
+xlsxwriter
+streamlit-authenticator==0.4.2
+pyyaml 
