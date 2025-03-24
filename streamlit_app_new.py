@@ -81,29 +81,27 @@ def send_reset_email(email, reset_token):
         
         print(f"Attempting to send email from {sender_email} to {receiver_email}")
         
+        # Create a complete reset link
+        reset_link = f"https://mybetbuddy-df3f219c1b11.herokuapp.com/reset-password?token={reset_token}"
+        
         # Create message
         msg = MIMEMultipart()
         msg['From'] = sender_email
         msg['To'] = receiver_email
-        msg['Subject'] = "MyBetBuddy Password Reset"
+        msg['Subject'] = "Password Reset Request"
         msg['Date'] = formatdate(localtime=True)
-        
-        # Create reset link
-        reset_link = f"http://localhost:8501/reset-password?token={reset_token}"
         
         # Email body
         body = f"""
         Hello,
         
-        You have requested to reset your password for your MyBetBuddy account.
-        
-        Click the link below to reset your password:
+        You have requested to reset your password for MyBetBuddy. Click the link below to reset your password:
         
         {reset_link}
         
-        This link will expire in 24 hours.
+        This link will expire in 1 hour.
         
-        If you didn't request this password reset, please ignore this email.
+        If you did not request this password reset, please ignore this email.
         
         Best regards,
         MyBetBuddy Team
