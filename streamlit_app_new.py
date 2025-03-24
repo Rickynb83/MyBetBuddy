@@ -12,6 +12,15 @@ from yaml.loader import SafeLoader
 import csv
 import hashlib
 import base64
+import json
+from streamlit_javascript import st_javascript
+import secrets
+from datetime import datetime, timedelta
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+from email.utils import formatdate
+from supabase import create_client, Client
 
 # Add the current directory to the Python path
 current_dir = Path(__file__).parent
@@ -28,6 +37,208 @@ from lib.predictions import predict_match, create_fallback_prediction
 
 # Load environment variables
 load_dotenv()
+
+# Initialize Supabase client
+supabase_url = os.getenv("SUPABASE_URL")
+supabase_key = os.getenv("SUPABASE_KEY")
+supabase: Client = create_client(supabase_url, supabase_key)
+
+# Authentication functions
+def authenticate_user(username, password):
+    """Authenticate user with username and password"""
+    try:
+        # Get user from database
+        user = supabase.table('users').select('*').eq('username', username).execute()
+        
+        if user.data and len(user.data) > 0:
+            user_data = user.data[0]
+            # Verify password
+            if verify_password(password, user_data['password']):
+                return user_data
+        return None
+    except Exception as e:
+        print(f"Authentication error: {e}")
+        return None
+
+def generate_reset_token():
+    """Generate a secure random token for password reset"""
+    return secrets.token_urlsafe(32)
+
+def send_reset_email(email, reset_token):
+    """Send password reset email using Zoho Mail"""
+    try:
+        # Get Zoho credentials from environment variables
+        zoho_password = os.getenv('ZOHO_MAIL_PASSWORD')
+        if not zoho_password:
+            print("Error: Zoho password not found in environment variables")
+            st.error("Email configuration error: Zoho password not found")
+            return False
+            
+        # Email configuration
+        sender_email = "welcome@mybetbuddy.app"  # Your Zoho email
+        sender_password = zoho_password
+        receiver_email = email
+        
+        print(f"Attempting to send email from {sender_email} to {receiver_email}")
+        
+        # Create message
+        msg = MIMEMultipart()
+        msg['From'] = sender_email
+        msg['To'] = receiver_email
+        msg['Subject'] = "MyBetBuddy Password Reset"
+        msg['Date'] = formatdate(localtime=True)
+        
+        # Create reset link
+        reset_link = f"http://localhost:8501/reset-password?token={reset_token}"
+        
+        # Email body
+        body = f"""
+        Hello,
+        
+        You have requested to reset your password for your MyBetBuddy account.
+        
+        Click the link below to reset your password:
+        
+        {reset_link}
+        
+        This link will expire in 24 hours.
+        
+        If you didn't request this password reset, please ignore this email.
+        
+        Best regards,
+        MyBetBuddy Team
+        """
+        
+        msg.attach(MIMEText(body, 'plain'))
+        
+        print("Connecting to Zoho Mail SMTP server...")
+        # Create SMTP session with Zoho Mail settings
+        with smtplib.SMTP_SSL('smtppro.zoho.eu', 465) as server:  # Use SSL port 465
+            print("Attempting to login...")
+            server.login(sender_email, sender_password)
+            print("Login successful, sending message...")
+            server.send_message(msg)
+            print("Message sent successfully")
+        
+        return True
+        
+    except Exception as e:
+        print(f"Error sending email: {str(e)}")
+        if hasattr(e, 'smtp_error'):
+            print(f"SMTP Error: {e.smtp_error}")
+        if hasattr(e, 'smtp_code'):
+            print(f"SMTP Code: {e.smtp_code}")
+        return False
+
+def request_password_reset(email):
+    """Handle password reset request."""
+    try:
+        # Debug: Print the email being searched for
+        print(f"Searching for email: {email}")
+        
+        # Check if email exists
+        response = supabase.table('users').select('id').eq('email', email).execute()
+        
+        # Debug: Print the response
+        print(f"Database response: {response}")
+        
+        if not response.data:
+            st.error("Email not found. Please check your email address.")
+            return False
+            
+        # Generate reset token
+        reset_token = generate_reset_token()
+        expires_at = datetime.now() + timedelta(hours=24)
+        
+        # Debug: Print the update data
+        print(f"Updating user with token: {reset_token}")
+        
+        # Update user with reset token
+        update_response = supabase.table('users').update({
+            'reset_token': reset_token,
+            'reset_token_expires': expires_at.isoformat()
+        }).eq('email', email).execute()
+        
+        # Debug: Print the update response
+        print(f"Update response: {update_response}")
+        
+        # Send reset email
+        if send_reset_email(email, reset_token):
+            st.success("Password reset link has been sent to your email.")
+            return True
+        else:
+            st.error("Failed to send reset email. Please try again later.")
+            return False
+            
+    except Exception as e:
+        st.error(f"Error processing reset request: {str(e)}")
+        return False
+
+def reset_password(token, new_password):
+    """Reset user's password using reset token."""
+    try:
+        # Verify token and get user
+        response = supabase.table('users').select('id').eq('reset_token', token).execute()
+        
+        if not response.data:
+            st.error("Invalid or expired reset token.")
+            return False
+            
+        user = response.data[0]
+        
+        # Update password and clear reset token
+        supabase.table('users').update({
+            'password': new_password,
+            'reset_token': None,
+            'reset_token_expires': None
+        }).eq('id', user['id']).execute()
+        
+        return True
+    except Exception as e:
+        st.error(f"Error resetting password: {str(e)}")
+        return False
+
+def register_user(username, email, password):
+    """Register a new user in Supabase"""
+    try:
+        # Check if username already exists
+        existing_username = supabase.table('users').select('id').eq('username', username).execute()
+        if existing_username.data:
+            st.error("Username already exists")
+            return False
+            
+        # Check if email already exists
+        existing_email = supabase.table('users').select('id').eq('email', email).execute()
+        if existing_email.data:
+            st.error("Email already registered. Please use a different email or try logging in.")
+            return False
+            
+        # Check if email is whitelisted
+        whitelist = load_whitelist()
+        if email not in whitelist:
+            st.error(f"Email not in whitelist. Please contact the administrator.")
+            return False
+            
+        # Hash the password
+        hashed_password = hash_password(password)
+        
+        # Insert new user into Supabase
+        response = supabase.table('users').insert({
+            'username': username,
+            'email': email,
+            'password': hashed_password
+        }).execute()
+        
+        if response.data:
+            st.success("Registration successful! Please login.")
+            return True
+        else:
+            st.error("Registration failed. Please try again.")
+            return False
+            
+    except Exception as e:
+        st.error(f"Registration error: {str(e)}")
+        return False
 
 # Set page config (must be the first Streamlit command)
 st.set_page_config(
@@ -83,24 +294,25 @@ if not DEVELOPMENT_MODE:
     # If not authenticated, show login/register form
     if not st.session_state.authenticated:
         st.title("MyBetBuddy - Football Match Predictions")
-        st.subheader("Login")
         
-        # Toggle between login and register
-        login_tab, register_tab = st.tabs(["Login", "Register"])
+        # Add tabs for login, register, and password reset
+        tab1, tab2, tab3 = st.tabs(["Login", "Register", "Reset Password"])
         
-        with login_tab:
+        with tab1:
+            st.subheader("Login")
             username = st.text_input("Username", key="login_username")
             password = st.text_input("Password", type="password", key="login_password")
             
             if st.button("Login"):
-                if username in users and users[username]['password'] == hash_password(password):
+                user = authenticate_user(username, password)
+                if user:
                     st.session_state.authenticated = True
-                    st.session_state.username = username
+                    st.session_state.user = user
                     st.rerun()
                 else:
                     st.error("Invalid username or password")
         
-        with register_tab:
+        with tab2:
             st.subheader("Register New Account")
             st.info("You must use a whitelisted email to register.")
             
@@ -115,18 +327,20 @@ if not DEVELOPMENT_MODE:
                     st.error("All fields are required")
                 elif reg_password != reg_password2:
                     st.error("Passwords do not match")
-                elif reg_username in users:
-                    st.error("Username already exists")
-                elif reg_email not in whitelist:
-                    st.error(f"Email not in whitelist. Authorized emails: {whitelist}")
                 else:
-                    # Create new user
-                    users[reg_username] = {
-                        'email': reg_email,
-                        'password': hash_password(reg_password)
-                    }
-                    save_users(users)
-                    st.success("Registration successful! Please login.")
+                    # Register user in Supabase
+                    if register_user(reg_username, reg_email, reg_password):
+                        st.rerun()  # Rerun to show login form
+        
+        with tab3:
+            st.subheader("Reset Password")
+            st.write("Enter your email address to receive a password reset link")
+            reset_email = st.text_input("Email", key="reset_email")
+            if st.button("Send Reset Link"):
+                if request_password_reset(reset_email):
+                    st.success("Password reset link has been sent to your email")
+                else:
+                    st.error("Email not found or error sending reset link")
         
         # Stop execution here if not authenticated
         if not st.session_state.authenticated:
@@ -143,6 +357,35 @@ if not DEVELOPMENT_MODE:
             st.session_state.mobile_view = mobile_view
             st.rerun()
         
+        # Add compact tables toggle
+        compact_tables = st.sidebar.checkbox("Compact tables (better for small screens)", value=st.session_state.get('compact_tables', False))
+        if compact_tables != st.session_state.get('compact_tables', False):
+            st.session_state.compact_tables = compact_tables
+            st.rerun()
+        
+        # Add admin section for password reset (only for admin users)
+        if st.session_state.username == "admin" or st.session_state.username == "rickynb83":
+            st.sidebar.markdown("### Admin Tools")
+            st.sidebar.markdown("#### Reset User Password")
+            
+            # Get list of usernames
+            user_list = list(users.keys())
+            selected_user = st.sidebar.selectbox("Select User", user_list)
+            
+            new_password = st.sidebar.text_input("New Password", type="password", key="new_password")
+            confirm_password = st.sidebar.text_input("Confirm Password", type="password", key="confirm_password")
+            
+            if st.sidebar.button("Reset Password"):
+                if new_password != confirm_password:
+                    st.sidebar.error("Passwords do not match")
+                elif not new_password:
+                    st.sidebar.error("Password cannot be empty")
+                else:
+                    # Update the user's password
+                    users[selected_user]['password'] = hash_password(new_password)
+                    save_users(users)
+                    st.sidebar.success(f"Password reset for {selected_user}")
+        
         if st.sidebar.button("Logout"):
             st.session_state.authenticated = False
             st.session_state.username = None
@@ -151,18 +394,36 @@ if not DEVELOPMENT_MODE:
 # Apply custom CSS for consistent font sizes and adjust padding to fix header overlap
 st.markdown("""
 <style>
-    /* Adjust font size for all tables */
-    .stDataFrame table, .stTable table {
-        font-size: 16px;
+    /* Force all tables to fit within the container width */
+    .stDataFrame, .stTable, [data-testid="stDataFrameResizable"] {
+        width: auto !important;
+        max-width: 100% !important;
+        overflow-x: hidden !important;
     }
+    
+    /* Force table to use fixed layout and fit within container */
+    .stDataFrame table, .stTable table {
+        width: auto !important;
+        table-layout: fixed !important;
+        font-size: 14px;
+    }
+    
+    /* Force all table cells to wrap content and limit width */
+    .stDataFrame table td, .stTable table td,
+    .stDataFrame table th, .stTable table th {
+        white-space: normal !important;
+        word-break: break-word !important;
+        overflow: hidden !important;
+        text-overflow: ellipsis !important;
+        padding: 0.15rem 0.2rem !important;
+        font-size: inherit !important;
+    }
+    
     /* Remove top padding to prevent header overlap */
     .block-container {
         padding-top: 3rem;
     }
-    /* Adjust table widths */
-    .stDataFrame, .stTable {
-        width: 100%;
-    }
+    
     /* Style for analysis sections */
     .analysis-section {
         background-color: #f0f2f6;
@@ -171,16 +432,15 @@ st.markdown("""
         margin: 1rem 0;
     }
     
-    /* Responsive design improvements */
-    /* Make tables horizontally scrollable on small screens */
-    .stDataFrame, .stTable {
-        overflow-x: auto;
-    }
-    
     /* Adjust font sizes for mobile */
     @media screen and (max-width: 640px) {
         .stDataFrame table, .stTable table {
-            font-size: 12px;
+            font-size: 10px !important;
+        }
+        
+        .stDataFrame table td, .stTable table td,
+        .stDataFrame table th, .stTable table th {
+            padding: 0.1rem 0.15rem !important;
         }
         
         h1 {
@@ -210,13 +470,201 @@ st.markdown("""
     /* Tablet adjustments */
     @media screen and (min-width: 641px) and (max-width: 1024px) {
         .stDataFrame table, .stTable table {
-            font-size: 14px;
+            font-size: 12px !important;
         }
     }
     
     /* Ensure buttons and interactive elements are touch-friendly */
     button, select, .stSelectbox, .stMultiselect {
         min-height: 36px;
+    }
+    
+    /* Hide horizontal scrollbar */
+    .stDataFrame::-webkit-scrollbar-horizontal,
+    .stTable::-webkit-scrollbar-horizontal,
+    [data-testid="stDataFrameResizable"]::-webkit-scrollbar-horizontal {
+        display: none !important;
+    }
+    
+    /* Additional fixes for Streamlit's internal containers */
+    [data-testid="stDataFrameResizable"] {
+        overflow-x: hidden !important;
+        width: auto !important;
+    }
+    
+    /* Target the specific container that might be causing scrolling */
+    [data-testid="stHorizontalBlock"] {
+        overflow-x: hidden !important;
+        max-width: 100% !important;
+    }
+    
+    /* Target the table wrapper */
+    .stDataFrame > div, .stTable > div {
+        overflow-x: hidden !important;
+    }
+    
+    /* Disable all horizontal scrolling in the app */
+    div[data-testid="stAppViewContainer"] {
+        overflow-x: hidden !important;
+    }
+    
+    /* Disable column resizing */
+    .resize-handle {
+        display: none !important;
+    }
+    
+    /* Fix for tab navigation bar */
+    .stTabs [data-baseweb="tab-list"] {
+        flex-wrap: wrap !important;
+        overflow-x: hidden !important;
+    }
+    
+    /* API-Football widget style for standings table */
+    .api-football-standings {
+        width: 100%;
+        border-collapse: collapse;
+        font-family: Arial, sans-serif;
+        font-size: 14px;
+        box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+        border-radius: 4px;
+        overflow: hidden;
+    }
+    
+    .api-football-standings th {
+        background-color: #38003c !important;
+        color: white !important;
+        font-weight: bold !important;
+        text-align: center !important;
+        padding: 10px 5px !important;
+        font-size: 12px !important;
+        position: sticky !important;
+        top: 0 !important;
+        z-index: 10 !important;
+    }
+    
+    .api-football-standings td {
+        padding: 8px 5px;
+        text-align: center;
+        border-bottom: 1px solid #f0f0f0;
+    }
+    
+    .api-football-standings tr:nth-child(even) {
+        background-color: #f9f9f9;
+    }
+    
+    .api-football-standings tr:hover {
+        background-color: #f0f0f0;
+    }
+    
+    .team-cell {
+        display: flex;
+        align-items: center;
+        text-align: left;
+        padding-left: 5px;
+    }
+    
+    .form-badge {
+        display: inline-block;
+        width: 16px;
+        height: 16px;
+        line-height: 16px;
+        text-align: center;
+        border-radius: 50%;
+        color: white;
+        font-size: 10px;
+        margin-right: 2px;
+    }
+    
+    .form-w {
+        background-color: #4CAF50;
+    }
+    
+    .form-d {
+        background-color: #FFC107;
+    }
+    
+    .form-l {
+        background-color: #F44336;
+    }
+    
+    /* Ensure tables are aligned properly */
+    .stTabs [data-baseweb="tab-panel"] {
+        padding-top: 0 !important;
+    }
+    
+    .stTabs [data-baseweb="tab-panel"] h3 {
+        margin-top: 1rem !important;
+        margin-bottom: 0.5rem !important;
+        height: 40px !important;
+        line-height: 40px !important;
+    }
+    
+    /* Ensure both tables have the same top alignment */
+    .stTabs [data-baseweb="tab-panel"] .stSubheader {
+        margin-top: 0 !important;
+        margin-bottom: 0.5rem !important;
+        height: 40px !important;
+        line-height: 40px !important;
+    }
+    
+    /* Ensure columns have equal spacing */
+    .stTabs [data-baseweb="tab-panel"] .row-widget {
+        margin-top: 0 !important;
+    }
+    
+    /* Scrollable container styling with fixed header */
+    .standings-scroll-container {
+        max-height: 500px;
+        overflow-y: auto;
+        border-radius: 4px;
+        box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+    }
+    
+    /* Custom scrollbar styling */
+    .standings-scroll-container::-webkit-scrollbar {
+        width: 8px;
+    }
+    
+    .standings-scroll-container::-webkit-scrollbar-track {
+        background: #f1f1f1;
+        border-radius: 4px;
+    }
+    
+    .standings-scroll-container::-webkit-scrollbar-thumb {
+        background: #38003c;
+        border-radius: 4px;
+    }
+    
+    .standings-scroll-container::-webkit-scrollbar-thumb:hover {
+        background: #5a1e5a;
+    }
+    
+    /* Style for data editor headers */
+    .stDataFrame [data-testid="stDataFrameResizable"] th {
+        background-color: #38003c !important;
+        color: white !important;
+        font-weight: bold !important;
+        text-align: center !important;
+        padding: 10px 5px !important;
+        font-size: 12px !important;
+    }
+    
+    /* Style for data editor header cells */
+    .stDataFrame [data-testid="stDataFrameResizable"] thead th:hover {
+        background-color: #38003c !important;
+        color: white !important;
+    }
+    
+    /* Style for data editor header cells when selected */
+    .stDataFrame [data-testid="stDataFrameResizable"] thead th:focus {
+        background-color: #38003c !important;
+        color: white !important;
+    }
+    
+    /* Style for data editor header cells when active */
+    .stDataFrame [data-testid="stDataFrameResizable"] thead th:active {
+        background-color: #38003c !important;
+        color: white !important;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -296,6 +744,12 @@ if st.button("🔄 Refresh Data"):
 standings = fetch_standings()
 print("Standings Data:", standings)  # Debug line to check the fetched standings data
 
+# Add debug print to check the structure of the standings data
+for league_name, league_data in standings.items():
+    print(f"League: {league_name}, Number of teams: {len(league_data)}")
+    if league_data and len(league_data) > 0:
+        print(f"First team: {league_data[0]}")
+
 # Initialize session state for selected fixtures and analysis data
 if 'selected_fixtures' not in st.session_state:
     st.session_state.selected_fixtures = []
@@ -320,6 +774,7 @@ LEAGUE_IDS = {
     'League One': 41,
     'League Two': 42,
     'Super League': 183,
+    'Premiership': 179,  # Scottish Premiership
     'Super League 1': 197,  # Add correct ID if needed
     'Süper Lig': 145  # Add correct ID if needed
 }
@@ -354,10 +809,137 @@ def get_cached_prediction(home_team_id, away_team_id, league_id):
         print(f"Prediction error in cache function: {str(e)}")
         return create_fallback_prediction()
 
+# Callback function to handle fixture selection updates
+def handle_fixture_selection(key, selected):
+    """
+    Handles fixture selection updates from the UI.
+    
+    This function is called when a user clicks a checkbox in the fixtures table.
+    It parses the fixture key to extract team names and date, then updates the
+    session state accordingly.
+    
+    Parameters:
+    -----------
+    key : str
+        The fixture key in format "Home Team vs Away Team (Date)"
+    selected : bool
+        Whether the fixture is selected (True) or deselected (False)
+    """
+    print(f"Handling fixture selection: {key}, Selected: {selected}")
+    
+    # Parse the key to get fixture details
+    parts = key.split(" vs ")
+    if len(parts) == 2 and "(" in parts[1]:
+        home_team = parts[0]
+        away_team_date = parts[1].split(" (")
+        away_team = away_team_date[0]
+        date = away_team_date[1].rstrip(")")
+        
+        # Find the fixture in the session state
+        fixture_found = False
+        for i, fixture in enumerate(st.session_state.selected_fixtures):
+            if (fixture.get('Home Team') == home_team and 
+                fixture.get('Away Team') == away_team and 
+                fixture.get('Date') == date):
+                
+                # If deselected, remove from selected fixtures
+                if not selected:
+                    st.session_state.selected_fixtures.pop(i)
+                    print(f"Removed fixture: {key}")
+                fixture_found = True
+                break
+        
+        # If selected and not found, we need to add it directly
+        if selected and not fixture_found:
+            print(f"Adding fixture directly: {key}")
+            # Find the fixture in the current league's fixtures DataFrame
+            for league_name, league_id in LEAGUES.items():
+                try:
+                    fixtures = fetch_fixtures(league_id)
+                    if fixtures:
+                        fixtures_df = pd.DataFrame(fixtures)
+                        if not fixtures_df.empty:
+                            # Convert to proper format
+                            fixtures_df['Date'] = pd.to_datetime(fixtures_df['date']).dt.strftime('%d/%m %I:%M %p')
+                            fixtures_df['Date'] = fixtures_df['Date'].str.replace(' AM', 'am').str.replace(' PM', 'pm')
+                            fixtures_df = fixtures_df.rename(columns={'homeTeam': 'Home Team', 'awayTeam': 'Away Team'})
+                            
+                            # Find the matching fixture
+                            for _, row in fixtures_df.iterrows():
+                                if (row['Home Team'] == home_team and 
+                                    row['Away Team'] == away_team):
+                                    
+                                    # Get standings for this league to add positions
+                                    standings_data = fetch_standings().get(league_name, [])
+                                    standings_df = pd.DataFrame(standings_data)
+                                    
+                                    # Get positions if available
+                                    home_position = 'N/A'
+                                    away_position = 'N/A'
+                                    
+                                    if not standings_df.empty and 'team' in standings_df.columns and 'rank' in standings_df.columns:
+                                        home_team_data = standings_df[standings_df['team'] == home_team]
+                                        away_team_data = standings_df[standings_df['team'] == away_team]
+                                        
+                                        if not home_team_data.empty:
+                                            home_position = str(home_team_data.iloc[0]['rank'])
+                                        
+                                        if not away_team_data.empty:
+                                            away_position = str(away_team_data.iloc[0]['rank'])
+                                    
+                                    # Create fixture dict with all necessary data
+                                    fixture_dict = {
+                                        'Date': row['Date'],
+                                        'Home Position': home_position,
+                                        'Home Team': row['Home Team'],
+                                        'Away Team': row['Away Team'],
+                                        'Away Position': away_position,
+                                        'fixture_id': row['fixture_id'],
+                                        'home_team_id': row['home_team_id'],
+                                        'away_team_id': row['away_team_id'],
+                                        'venue': row['venue'],
+                                        'league': league_name
+                                    }
+                                    
+                                    # Add to session state
+                                    st.session_state.selected_fixtures.append(fixture_dict)
+                                    print(f"Added fixture to selected_fixtures: {fixture_dict}")
+                                    print(f"Current selected fixtures count: {len(st.session_state.selected_fixtures)}")
+                                    break
+                except Exception as e:
+                    print(f"Error finding fixture in {league_name}: {e}")
+    
+    # Print the current state of selected fixtures for debugging
+    print(f"Current selected fixtures after handling: {len(st.session_state.selected_fixtures)}")
+    for i, fixture in enumerate(st.session_state.selected_fixtures[:3]):  # Show first 3 for debugging
+        print(f"Fixture {i+1}: {fixture.get('Home Team')} vs {fixture.get('Away Team')} ({fixture.get('Date')})")
+    
+    # Only rerun if there were actual changes
+    if 'last_selection' not in st.session_state:
+        st.session_state.last_selection = None
+    
+    if st.session_state.last_selection != key:
+        st.session_state.last_selection = key
+        st.rerun()
+
 # Display standings if available
 if standings:
     # Create tabs for each league
     league_tabs = st.tabs(LEAGUES.keys())
+
+    # Pass selected fixtures to JavaScript
+    selected_keys = []
+    if st.session_state.selected_fixtures:
+        for fixture in st.session_state.selected_fixtures:
+            if isinstance(fixture, dict) and 'Home Team' in fixture and 'Away Team' in fixture and 'Date' in fixture:
+                selected_keys.append(f"{fixture['Home Team']} vs {fixture['Away Team']} ({fixture['Date']})")
+    
+    # Create JavaScript to store selected fixtures
+    js_code = f"""
+    window.selectedFixtures = {json.dumps(selected_keys)};
+    console.log("Initialized selected fixtures:", window.selectedFixtures);
+    """
+    st.markdown(f"<script>{js_code}</script>", unsafe_allow_html=True)
 
     for league, tab in zip(LEAGUES.keys(), league_tabs):
         with tab:
@@ -371,6 +953,10 @@ if standings:
                 # Create a DataFrame for the current league standings
                 standings_df = pd.DataFrame(standings[league])
 
+                # Debug: Print the raw standings data
+                print(f"\nDEBUG - Raw standings data for {league}:")
+                print(standings[league][:3])  # Print first 3 teams
+                
                 # Remove the extra columns and keep only the necessary columns
                 standings_df = standings_df[['rank', 'team', 'played', 'won', 'drawn', 'lost', 'for', 'against', 'points', 'goalsDiff', 'form']]
 
@@ -379,37 +965,88 @@ if standings:
 
                 # Sort the DataFrame by Position
                 standings_df = standings_df.sort_values(by='Position')
-
-                # Create display columns in exact order with Position first
-                # For mobile, show fewer columns
-                if st.session_state.get('mobile_view', False):
-                    display_columns = ['Position', 'Team', 'Played', 'Points', 'Form']
-                else:
-                    display_columns = ['Position', 'Team', 'Played', 'Won', 'Drawn', 'Lost', 'For', 'Against', 'Points', 'Goal Difference', 'Form']
                 
-                # Display the standings table with reduced width
-                st.dataframe(
-                    standings_df[display_columns],
-                    hide_index=True,
-                    height=320,
-                    use_container_width=True,
-                    column_config={
-                        col: st.column_config.TextColumn(
-                            col,
-                            disabled=True,
-                            required=True,
-                            width="small"  # Consistent column widths
-                        ) for col in display_columns
-                    }
-                )
+                # Debug: Print the sorted standings DataFrame
+                print(f"\nDEBUG - Sorted standings DataFrame for {league}:")
+                print(standings_df.head(3))
+
+                # Function to parse form string
+                def parse_form(form_str):
+                    if not form_str:
+                        return []
+                    
+                    # Handle different formats
+                    if isinstance(form_str, str):
+                        # Remove any whitespace or newlines
+                        form_str = form_str.strip()
+                        
+                        # If it's a string like "WDLWW"
+                        if all(c in "WDL" for c in form_str):
+                            return list(form_str)
+                        
+                        # If it's a string like "W,D,L,W,W"
+                        if "," in form_str:
+                            return [c.strip() for c in form_str.split(",")]
+                    
+                    # If it's already a list
+                    if isinstance(form_str, list):
+                        return form_str
+                    
+                    # Default: try to convert to string and get first 5 characters
+                    try:
+                        return list(str(form_str)[:5])
+                    except:
+                        return []
+
+                # Debug print to check the number of teams in the standings DataFrame
+                print(f"Number of teams in {league} standings: {len(standings_df)}")
+                
+                # Create a simple HTML table with minimal formatting and no extra whitespace
+                html_parts = []
+                html_parts.append('<div class="standings-scroll-container">')
+                html_parts.append('<table class="api-football-standings">')
+                html_parts.append('<thead>')
+                html_parts.append('<tr><th>#</th><th>Team</th><th>P</th><th>W</th><th>D</th><th>L</th><th>GF</th><th>GA</th><th>GD</th><th>Pts</th><th>Form</th></tr>')
+                html_parts.append('</thead>')
+                html_parts.append('<tbody>')
+                
+                # Iterate through each row in the standings DataFrame (all teams)
+                for _, row in standings_df.iterrows():
+                    # Format the form badges
+                    form_html = ""
+                    if 'Form' in row and row['Form']:
+                        form_results = parse_form(row['Form'])
+                        for result in form_results:
+                            if result == 'W':
+                                form_html += "<span class='form-badge form-w'>W</span>"
+                            elif result == 'D':
+                                form_html += "<span class='form-badge form-d'>D</span>"
+                            elif result == 'L':
+                                form_html += "<span class='form-badge form-l'>L</span>"
+                    
+                    # Create the row HTML with no extra whitespace
+                    html_parts.append(f'<tr><td>{row["Position"]}</td><td class="team-cell">{row["Team"]}</td><td>{row["Played"]}</td><td>{row["Won"]}</td><td>{row["Drawn"]}</td><td>{row["Lost"]}</td><td>{row["For"]}</td><td>{row["Against"]}</td><td>{row["Goal Difference"]}</td><td><strong>{row["Points"]}</strong></td><td>{form_html}</td></tr>')
+                
+                html_parts.append('</tbody>')
+                html_parts.append('</table>')
+                html_parts.append('</div>')
+                
+                # Join all parts with no extra whitespace
+                standings_html = ''.join(html_parts)
+                
+                # Debug print to check the HTML structure
+                print(f"Generated HTML for {league} standings with {len(standings_df)} rows")
+                
+                # Display the HTML table
+                st.markdown(standings_html, unsafe_allow_html=True)
 
             with tab_col2:
                 # Display fixtures for each league
                 st.subheader(f"{league} Fixtures")
-                
+
                 # Fetch fixtures for this league
                 fixtures = fetch_fixtures(LEAGUES[league])
-                
+
                 if not fixtures:
                     st.info(f"ℹ️ No upcoming fixtures found for {league} in the next 7 days. This is likely due to:")
                     st.markdown("""
@@ -418,12 +1055,9 @@ if standings:
                     - No scheduled matches in this period
                     """)
                     continue
-                
+
                 fixtures_df = pd.DataFrame(fixtures)
                 
-                if fixtures_df.empty:
-                    st.warning(f"No fixtures data found for {league}. Check the API response.")
-
                 if not fixtures_df.empty:
                     # Convert standings to DataFrame for mapping
                     current_standings_df = pd.DataFrame(standings[league])
@@ -433,7 +1067,9 @@ if standings:
                     fixtures_df['Away Position'] = fixtures_df['awayTeam'].map(current_standings_df.set_index('team')['rank'])
 
                     # Format the date
-                    fixtures_df['Date'] = pd.to_datetime(fixtures_df['date']).dt.strftime('%d/%m/%Y %I:%M %p')
+                    fixtures_df['Date'] = pd.to_datetime(fixtures_df['date']).dt.strftime('%d/%m %I:%M %p')
+                    # Convert AM/PM to lowercase am/pm
+                    fixtures_df['Date'] = fixtures_df['Date'].str.replace(' AM', 'am').str.replace(' PM', 'pm')
 
                     # Rearrange and rename columns
                     fixtures_df = fixtures_df.rename(columns={
@@ -457,9 +1093,6 @@ if standings:
                     # Mark fixtures as selected if they're in the session state
                     fixtures_df['Select'] = fixtures_df['key'].apply(lambda x: x in selected_keys)
 
-                    # Update column order to include Select
-                    fixtures_df = fixtures_df[['Select', 'Date', 'Home Position', 'Home Team', 'Away Team', 'Away Position', 'fixture_id', 'home_team_id', 'away_team_id', 'venue', 'league', 'key']]
-
                     # Handle missing position data
                     fixtures_df['Home Position'] = fixtures_df['Home Position'].fillna('N/A')
                     fixtures_df['Away Position'] = fixtures_df['Away Position'].fillna('N/A')
@@ -474,91 +1107,112 @@ if standings:
                     fixtures_df['Home Team'] = fixtures_df['Home Team'].astype(str)
                     fixtures_df['Away Team'] = fixtures_df['Away Team'].astype(str)
 
-                    # Hide key column and IDs from display
-                    display_df = fixtures_df.drop(columns=['key', 'fixture_id', 'home_team_id', 'away_team_id', 'venue', 'league'])
+                    # Create a container for the fixtures table
+                    fixtures_container = st.container()
 
-                    try:
-                        # Display fixtures table with selection column
+                    # Display the fixtures in a table with selectable rows
+                    with fixtures_container:
+                        # Create a unique key for the data editor
+                        editor_key = f"fixtures_editor_{league}"
+                        
+                        # Display the fixtures table with selectable rows
                         edited_df = st.data_editor(
-                            display_df,
+                            fixtures_df[['Select', 'Home Team', 'Home Position', 'Away Team', 'Away Position', 'Date']],
                             hide_index=True,
                             use_container_width=True,
-                            key=f"fixture_editor_{league}",  # Add unique key for each league
+                            key=editor_key,
                             column_config={
                                 "Select": st.column_config.CheckboxColumn(
                                     "Select",
-                                    default=False,
-                                    width="small",
-                                    help="Select fixtures to analyze"
+                                    help="Select a fixture to analyze",
+                                    default=False
                                 ),
-                                "Date": st.column_config.TextColumn("Date", width="medium"),
-                                "Home Position": st.column_config.TextColumn("Home Pos", width="small"),
-                                "Home Team": st.column_config.TextColumn("Home Team", width="medium"),
-                                "Away Team": st.column_config.TextColumn("Away Team", width="medium"),
-                                "Away Position": st.column_config.TextColumn("Away Pos", width="small")
+                                "Home Team": st.column_config.TextColumn("Home", width=150),
+                                "Home Position": st.column_config.TextColumn("Pos", width=50),
+                                "Away Team": st.column_config.TextColumn("Away", width=150),
+                                "Away Position": st.column_config.TextColumn("Pos", width=50),
+                                "Date": st.column_config.TextColumn("Date", width=100)
                             }
                         )
 
-                        # Get current selections from this league
-                        current_selections = edited_df[edited_df['Select']]
-                        
-                        # For selections in this league, add or update in session state
-                        all_selections = []
-                        if len(st.session_state.selected_fixtures) > 0:
-                            # Start with current selections from other leagues
-                            for fixture in st.session_state.selected_fixtures:
-                                if isinstance(fixture, dict) and 'Home Team' in fixture and 'Away Team' in fixture and 'Date' in fixture:
-                                    fixture_key = f"{fixture['Home Team']} vs {fixture['Away Team']} ({fixture['Date']})"
-                                    # Only keep selections that aren't from the current league (they'll be added back if still selected)
-                                    if not any(fixture_key == key for key in fixtures_df['key'].tolist()):
-                                        all_selections.append(fixture)
-                        
-                        # Add current selections from this league, including fixture_id
-                        if not current_selections.empty:
-                            for _, selected_row in current_selections.iterrows():
-                                # Get the original row with all IDs
-                                original_row = fixtures_df[
-                                    (fixtures_df['Home Team'] == selected_row['Home Team']) & 
-                                    (fixtures_df['Away Team'] == selected_row['Away Team']) &
-                                    (fixtures_df['Date'] == selected_row['Date'])
-                                ]
+                        # Handle selection changes using Streamlit's native selection handling
+                        if edited_df is not None:
+                            for idx, row in edited_df.iterrows():
+                                fixture_key = fixtures_df.iloc[idx]['key']
+                                is_selected = row['Select']
                                 
-                                if not original_row.empty:
-                                    # Create fixture dict with all necessary data
-                                    fixture_dict = {
-                                        'Date': selected_row['Date'],
-                                        'Home Position': selected_row['Home Position'],
-                                        'Home Team': selected_row['Home Team'],
-                                        'Away Team': selected_row['Away Team'],
-                                        'Away Position': selected_row['Away Position'],
-                                        'fixture_id': original_row.iloc[0]['fixture_id'],
-                                        'home_team_id': original_row.iloc[0]['home_team_id'],
-                                        'away_team_id': original_row.iloc[0]['away_team_id'],
-                                        'venue': original_row.iloc[0]['venue'],
-                                        'league': original_row.iloc[0]['league']
-                                    }
-                                    all_selections.append(fixture_dict)
+                                # Check if the selection state has changed
+                                if fixture_key in selected_keys and not is_selected:
+                                    # Fixture was deselected
+                                    handle_fixture_selection(fixture_key, False)
+                                elif fixture_key not in selected_keys and is_selected:
+                                    # Fixture was selected
+                                    handle_fixture_selection(fixture_key, True)
                         
-                        # Update session state with all selections
-                        st.session_state.selected_fixtures = all_selections
+                            # Only rerun if there were actual changes
+                            if 'last_editor_state' not in st.session_state:
+                                st.session_state.last_editor_state = {}
+                            
+                            current_state = str(edited_df['Select'].tolist())
+                            if st.session_state.last_editor_state.get(editor_key) != current_state:
+                                st.session_state.last_editor_state[editor_key] = current_state
+                                st.rerun()
 
-                    except Exception as e:
-                        st.error(f"Error displaying fixtures: {e}")
-                        print(f"Error details: {str(e)}")  # Add debug print
-                else:
-                    st.write("No upcoming fixtures available for this league.")
+                    # Add select/deselect all buttons below the table
+                    if st.button("Select/Deselect All", key=f"toggle_all_{league}"):
+                        # Check if all fixtures are currently selected
+                        all_selected = all(fixture_key in selected_keys for _, row in fixtures_df.iterrows() for fixture_key in [row['key']])
+                        
+                        if all_selected:
+                            # Deselect all fixtures
+                            for _, row in fixtures_df.iterrows():
+                                fixture_key = row['key']
+                                if fixture_key in selected_keys:
+                                    # Remove fixture from session state
+                                    st.session_state.selected_fixtures = [
+                                        f for f in st.session_state.selected_fixtures 
+                                        if not (f['Home Team'] == row['Home Team'] and 
+                                               f['Away Team'] == row['Away Team'] and 
+                                               f['Date'] == row['Date'])
+                                    ]
+                        else:
+                            # Select all fixtures
+                            for _, row in fixtures_df.iterrows():
+                                fixture_key = row['key']
+                                if fixture_key not in selected_keys:
+                                    # Add fixture directly to session state
+                                    fixture_dict = {
+                                        'Date': row['Date'],
+                                        'Home Position': row['Home Position'],
+                                        'Home Team': row['Home Team'],
+                                        'Away Team': row['Away Team'],
+                                        'Away Position': row['Away Position'],
+                                        'fixture_id': row['fixture_id'],
+                                        'home_team_id': row['home_team_id'],
+                                        'away_team_id': row['away_team_id'],
+                                        'venue': row['venue'],
+                                        'league': league
+                                    }
+                                    st.session_state.selected_fixtures.append(fixture_dict)
+                                    print(f"Added fixture to selected_fixtures: {fixture_dict}")
+                        st.rerun()
 
     # Display selected fixtures and analysis
     if st.session_state.selected_fixtures:
         st.markdown("---")
         st.subheader("Selected Fixtures")
         
+        # Debug print for selected fixtures
+        print(f"Displaying {len(st.session_state.selected_fixtures)} selected fixtures")
+        for i, fixture in enumerate(st.session_state.selected_fixtures[:3]):  # Show first 3 for debugging
+            print(f"Fixture {i+1}: {fixture.get('Home Team')} vs {fixture.get('Away Team')} ({fixture.get('Date')})")
+        
         # Convert the session state to a DataFrame
         selected_df = pd.DataFrame(st.session_state.selected_fixtures)
         
         # Ensure the DataFrame has the correct columns
         if not selected_df.empty:
-            display_columns = ['Date', 'Home Position', 'Home Team', 'Away Team', 'Away Position']
+            display_columns = ['Home Team', 'Away Team', 'Date']
             for col in display_columns:
                 if col not in selected_df.columns:
                     selected_df[col] = ""
@@ -568,13 +1222,24 @@ if standings:
         st.dataframe(
             selected_df,
             hide_index=True,
-            use_container_width=True
+            use_container_width=False,
+            column_config={
+                "Home Team": st.column_config.TextColumn("Home", width=150),
+                "Away Team": st.column_config.TextColumn("Away", width=150),
+                "Date": st.column_config.TextColumn("Date", width=100)
+            }
         )
 
-        # Add analyze button
-        if st.button("Analyze Selected Fixtures"):
-            st.session_state.show_analysis = True
-            st.rerun()
+        # Add analyze and instructions buttons in the same row
+        col1, col2 = st.columns([1, 4])
+        with col1:
+            if st.button("Analyze Selected Fixtures"):
+                st.session_state.show_analysis = True
+                st.rerun()
+        with col2:
+            if st.button("📖 Instructions"):
+                st.session_state.show_instructions = True
+                st.rerun()
 
         # Display analysis if enabled
         if st.session_state.show_analysis:
@@ -630,15 +1295,27 @@ if standings:
                         fixture_key = f"{row['Home Team']} vs {row['Away Team']} ({row['Date']})"
                         
                         # Get correct league ID from the mapping
+                        league_id = None
                         if isinstance(row['league'], str) and row['league'] in LEAGUE_IDS:
                             league_id = LEAGUE_IDS[row['league']]
                         else:
                             # Try to get league ID directly if it's already a number
-                            league_id = int(row['league']) if str(row['league']).isdigit() else None
+                            try:
+                                if str(row['league']).isdigit():
+                                    league_id = int(row['league'])
+                                # If league is not recognized, use a fallback ID (Premier League)
+                                else:
+                                    print(f"Invalid league: {row['league']} for {fixture_key}")
+                                    print(f"Using fallback league ID for {fixture_key}")
+                                    league_id = 39  # Use Premier League as fallback
+                            except:
+                                st.warning(f"League '{row['league']}' not recognized for {fixture_key}. Using fallback predictions.")
+                                league_id = 39  # Use Premier League as fallback
                         
                         if not league_id:
                             st.error(f"Invalid league: {row['league']} for {fixture_key}")
-                            raise ValueError("Invalid league ID")
+                            print(f"Using fallback league ID for {fixture_key}")
+                            league_id = 39  # Use Premier League as fallback
                         
                         # Get cached prediction with unique key for each match
                         prediction = get_cached_prediction(
@@ -684,10 +1361,25 @@ if standings:
                 analysis_df['Away Win %'] = analysis_df['Away Win %'].apply(lambda x: f"{x:.0f}%")
 
                 # Ensure numeric comparison for highest probability
-                analysis_df['Highest Probability %'] = analysis_df[['Home Win %', 'Draw %', 'Away Win %']].apply(lambda x: max(float(x['Home Win %'].strip('%')), float(x['Draw %'].strip('%')), float(x['Away Win %'].strip('%'))), axis=1)
+                analysis_df['Highest Probability %'] = analysis_df[['Home Win %', 'Draw %', 'Away Win %']].apply(
+                    lambda x: max(
+                        float(x['Home Win %'].strip('%')), 
+                        float(x['Draw %'].strip('%')), 
+                        float(x['Away Win %'].strip('%'))
+                    ), 
+                    axis=1
+                )
+                
+                # Format Highest Probability % as string with % symbol
+                analysis_df['Highest Probability %'] = analysis_df['Highest Probability %'].apply(lambda x: f"{x:.0f}%")
 
                 # Correct the logic for determining the predicted result
-                analysis_df['Predicted Result'] = analysis_df.apply(lambda row: 'Home Win' if float(row['Home Win %'].strip('%')) == row['Highest Probability %'] else ('Draw' if float(row['Draw %'].strip('%')) == row['Highest Probability %'] else 'Away Win'), axis=1)
+                analysis_df['Predicted Result'] = analysis_df.apply(
+                    lambda row: 'Home Win' if float(row['Home Win %'].strip('%')) == float(row['Highest Probability %'].strip('%')) 
+                    else ('Draw' if float(row['Draw %'].strip('%')) == float(row['Highest Probability %'].strip('%')) 
+                    else 'Away Win'), 
+                    axis=1
+                )
             
             # Add a column for detailed analysis
             analysis_df['View Details'] = analysis_df.apply(
@@ -698,15 +1390,29 @@ if standings:
                 axis=1
             )
             
+            # Sort the DataFrame by Highest Probability % in descending order
+            analysis_df = analysis_df.sort_values('Highest Probability %', ascending=False)
+            
+            # Rename Highest Probability % to Prediction
+            analysis_df = analysis_df.rename(columns={'Highest Probability %': 'Prediction'})
+            
             # Display analysis results with all available data
             display_columns = [
                 'Date', 'Home Team', 'Away Team',
                 'Home Win %', 'Draw %', 'Away Win %',
-                'Highest Probability %', 'Predicted Result',
+                'Prediction', 'Predicted Result',
                 'Prediction Details',  # This contains winner, advice, win_or_draw, under_over, and goals
                 'Source',
                 'View Details'
             ]
+
+            # For mobile view or compact tables, show fewer columns
+            if st.session_state.get('mobile_view', False) or st.session_state.get('compact_tables', False):
+                display_columns = [
+                    'Home Team', 'Away Team',
+                    'Prediction', 'Predicted Result',
+                    'View Details'
+                ]
 
             # Ensure all columns exist and remove any duplicates
             analysis_df = analysis_df.loc[:, ~analysis_df.columns.duplicated()]
@@ -718,11 +1424,20 @@ if standings:
             edited_df = st.data_editor(
                 analysis_df[display_columns],
                 hide_index=True,
-                use_container_width=True,
+                use_container_width=False,
                 key=editor_key,
                 column_config={
+                    "Date": st.column_config.TextColumn("Date", width=100),
+                    "Home Team": st.column_config.TextColumn("Home", width=150),
+                    "Away Team": st.column_config.TextColumn("Away", width=150),
+                    "Home Win %": st.column_config.TextColumn("H%", width=60),
+                    "Draw %": st.column_config.TextColumn("D%", width=60),
+                    "Away Win %": st.column_config.TextColumn("A%", width=60),
+                    "Prediction": st.column_config.TextColumn("Pred", width=70),
+                    "Predicted Result": st.column_config.TextColumn("Result", width=80),
+                    "Source": st.column_config.TextColumn("Src", width=70),
                     "View Details": st.column_config.SelectboxColumn(
-                        "Additional Analysis",  # Change only the display name
+                        "More",  # Even shorter display name
                         options=[
                             "Select Analysis",
                             "Head-to-Head",
@@ -736,11 +1451,11 @@ if standings:
                             "Referee Information",
                             "All Data"
                         ],
-                        width="medium"
+                        width=120
                     ),
                     "Prediction Details": st.column_config.TextColumn(
-                        "Alternative Bet",
-                        width="large"
+                        "Alt", 
+                        width=120
                     )
                 }
             )
@@ -956,9 +1671,6 @@ if standings:
                 row = analysis_df.iloc[i]
                 if row['Home Team'] == 'Inter' and row['Away Team'] == 'Monza':
                     print(f"Debug: Inter vs Monza - Home Win %: {row['Home Win %']}, Draw %: {row['Draw %']}, Away Win %: {row['Away Win %']}, Highest Probability %: {row['Highest Probability %']}, Predicted Result: {row['Predicted Result']}")
-
-            # Ensure 'Highest Probability %' is formatted as a percentage
-            analysis_df['Highest Probability %'] = analysis_df['Highest Probability %'].apply(lambda x: f"{float(x):.0f}%")
 
             # Correct string parsing for expected goals and cards
             analysis_df['Prediction Details'] = analysis_df.apply(
