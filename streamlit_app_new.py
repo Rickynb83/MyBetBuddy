@@ -113,25 +113,30 @@ def send_reset_email(email, reset_token):
         
         print("Connecting to Zoho Mail SMTP server...")
         # Create SMTP session with Zoho Mail settings
-        with smtplib.SMTP_SSL('smtp.zoho.com', 465) as server:  # Use Zoho's main SMTP server
+        with smtplib.SMTP_SSL('smtp.zoho.com', 465) as server:
             print("Attempting to login...")
-            server.login(sender_email, sender_password)
-            print("Login successful, sending message...")
-            server.send_message(msg)
-            print("Message sent successfully")
+            try:
+                server.login(sender_email, sender_password)
+                print("Login successful, sending message...")
+                server.send_message(msg)
+                print("Message sent successfully")
+                return True
+            except smtplib.SMTPAuthenticationError as e:
+                print(f"SMTP Authentication Error: {str(e)}")
+                print(f"Error code: {e.smtp_code if hasattr(e, 'smtp_code') else 'Unknown'}")
+                print(f"Error message: {e.smtp_error if hasattr(e, 'smtp_error') else str(e)}")
+                st.error("Failed to authenticate with Zoho Mail. Please check your email credentials.")
+                return False
+            except smtplib.SMTPException as e:
+                print(f"SMTP Error: {str(e)}")
+                print(f"Error code: {e.smtp_code if hasattr(e, 'smtp_code') else 'Unknown'}")
+                print(f"Error message: {e.smtp_error if hasattr(e, 'smtp_error') else str(e)}")
+                st.error(f"Failed to send email: {str(e)}")
+                return False
         
-        return True
-        
-    except smtplib.SMTPAuthenticationError as e:
-        print(f"SMTP Authentication Error: {str(e)}")
-        st.error("Failed to authenticate with Zoho Mail. Please check your email credentials.")
-        return False
-    except smtplib.SMTPException as e:
-        print(f"SMTP Error: {str(e)}")
-        st.error(f"Failed to send email: {str(e)}")
-        return False
     except Exception as e:
         print(f"Unexpected error sending email: {str(e)}")
+        print(f"Error type: {type(e).__name__}")
         st.error(f"An unexpected error occurred while sending the email: {str(e)}")
         return False
 
