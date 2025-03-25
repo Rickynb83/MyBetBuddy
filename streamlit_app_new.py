@@ -170,6 +170,7 @@ def request_password_reset(email):
             return False
             
     except Exception as e:
+        print(f"Error in request_password_reset: {str(e)}")
         st.error(f"Error processing reset request: {str(e)}")
         return False
 
@@ -1076,8 +1077,17 @@ if standings:
                     fixtures_df['Home Position'] = fixtures_df['homeTeam'].map(current_standings_df.set_index('team')['rank'])
                     fixtures_df['Away Position'] = fixtures_df['awayTeam'].map(current_standings_df.set_index('team')['rank'])
 
-                    # Format the date
-                    fixtures_df['Date'] = pd.to_datetime(fixtures_df['date']).dt.strftime('%d/%m %I:%M %p')
+                    # Format the date with error handling
+                    try:
+                        # First try to parse the date column
+                        fixtures_df['date'] = pd.to_datetime(fixtures_df['date'])
+                        # Then format it
+                        fixtures_df['Date'] = fixtures_df['date'].dt.strftime('%d/%m %I:%M %p')
+                    except Exception as e:
+                        print(f"Error formatting date: {e}")
+                        # Fallback to a simpler date format
+                        fixtures_df['Date'] = fixtures_df['date'].astype(str)
+
                     # Convert AM/PM to lowercase am/pm
                     fixtures_df['Date'] = fixtures_df['Date'].str.replace(' AM', 'am').str.replace(' PM', 'pm')
 
