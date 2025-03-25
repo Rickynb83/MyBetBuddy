@@ -1435,7 +1435,7 @@ if standings:
                 'Home Win %', 'Draw %', 'Away Win %',
                 'Prediction', 'Predicted Result',
                 'Prediction Details',  # This contains winner, advice, win_or_draw, under_over, and goals
-                'Additional Analysis'  # Renamed from 'View Details'
+                'View Details'  # Keep this as is for now
             ]
 
             # For mobile view or compact tables, show fewer columns
@@ -1443,7 +1443,7 @@ if standings:
                 display_columns = [
                     'Home Team', 'Away Team',
                     'Prediction', 'Predicted Result',
-                    'Additional Analysis'
+                    'View Details'
                 ]
 
             # Ensure all columns exist and remove any duplicates
@@ -1512,7 +1512,7 @@ if standings:
                     "Away Win %": st.column_config.TextColumn("A%", width=60),
                     "Prediction": st.column_config.TextColumn("Pred", width=70),
                     "Predicted Result": st.column_config.TextColumn("Result", width=80),
-                    "Additional Analysis": st.column_config.SelectboxColumn(
+                    "View Details": st.column_config.SelectboxColumn(
                         "Additional Analysis",
                         options=[
                             "Select Analysis",
@@ -1540,8 +1540,8 @@ if standings:
             for idx, row in edited_df.iterrows():
                 fixture_key = f"{row['Home Team']} vs {row['Away Team']} ({row['Date']})"
                 current_selection = st.session_state.analysis_selections.get(fixture_key, "Select Analysis")
-                if row['Additional Analysis'] != current_selection:
-                    st.session_state.analysis_selections[fixture_key] = row['Additional Analysis']
+                if row['View Details'] != current_selection:
+                    st.session_state.analysis_selections[fixture_key] = row['View Details']
                     st.rerun()
             
             # Create a container for detailed analysis
