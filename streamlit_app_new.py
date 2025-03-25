@@ -67,77 +67,70 @@ def generate_reset_token():
     return secrets.token_urlsafe(32)
 
 def send_reset_email(email, reset_token):
-    """Send password reset email using Zoho Mail"""
     try:
-        # Get Zoho credentials from environment variables
+        # Get Zoho email password from environment variables
         zoho_password = os.getenv('ZOHO_EMAIL_PASSWORD')
         if not zoho_password:
-            print("Error: Zoho password not found in environment variables")
-            st.error("Email configuration error: Zoho password not found")
+            print("Error: ZOHO_EMAIL_PASSWORD environment variable not found")
             return False
-            
-        # Email configuration
-        sender_email = "welcome@mybetbuddy.app"  # Your Zoho email
-        sender_password = zoho_password
-        receiver_email = email
-        
-        print(f"Attempting to send email from {sender_email} to {receiver_email}")
-        
-        # Create a complete reset link
-        reset_link = f"https://mybetbuddy-df3f219c1b11.herokuapp.com/reset-password?token={reset_token}"
-        
+
         # Create message
         msg = MIMEMultipart()
-        msg['From'] = sender_email
-        msg['To'] = receiver_email
-        msg['Subject'] = "Password Reset Request"
-        msg['Date'] = formatdate(localtime=True)
+        msg['From'] = 'welcome@mybetbuddy.app'
+        msg['To'] = email
+        msg['Subject'] = 'Password Reset Request'
+
+        # Create the reset link
+        reset_link = f"https://mybetbuddy-df3f219c1b11.herokuapp.com/?reset_token={reset_token}"
         
-        # Email body
+        # Create the email body
         body = f"""
         Hello,
-        
+
         You have requested to reset your password for MyBetBuddy. Click the link below to reset your password:
-        
+
         {reset_link}
-        
-        This link will expire in 24 hours.
-        
+
         If you did not request this password reset, please ignore this email.
-        
+
         Best regards,
         MyBetBuddy Team
         """
         
         msg.attach(MIMEText(body, 'plain'))
+
+        # Connect to Zoho Mail SMTP server
+        print("Attempting to connect to Zoho SMTP server...")
+        server = smtplib.SMTP('smtp.zoho.com', 587)
+        server.starttls()
         
-        print("Connecting to Zoho Mail SMTP server...")
-        # Create SMTP session with Zoho Mail settings
-        with smtplib.SMTP_SSL('smtp.zoho.com', 465) as server:
-            print("Attempting to login...")
-            try:
-                server.login(sender_email, sender_password)
-                print("Login successful, sending message...")
-                server.send_message(msg)
-                print("Message sent successfully")
-                return True
-            except smtplib.SMTPAuthenticationError as e:
-                print(f"SMTP Authentication Error: {str(e)}")
-                print(f"Error code: {e.smtp_code if hasattr(e, 'smtp_code') else 'Unknown'}")
-                print(f"Error message: {e.smtp_error if hasattr(e, 'smtp_error') else str(e)}")
-                st.error("Failed to authenticate with Zoho Mail. Please check your email credentials.")
-                return False
-            except smtplib.SMTPException as e:
-                print(f"SMTP Error: {str(e)}")
-                print(f"Error code: {e.smtp_code if hasattr(e, 'smtp_code') else 'Unknown'}")
-                print(f"Error message: {e.smtp_error if hasattr(e, 'smtp_error') else str(e)}")
-                st.error(f"Failed to send email: {str(e)}")
-                return False
-        
+        print("Attempting to login with credentials...")
+        try:
+            server.login('welcome@mybetbuddy.app', zoho_password)
+            print("Login successful!")
+        except smtplib.SMTPAuthenticationError as e:
+            print(f"SMTP Authentication Error: {e}")
+            print(f"Error code: {e.smtp_code}")
+            print(f"Error message: {e.smtp_error}")
+            return False
+        except smtplib.SMTPException as e:
+            print(f"SMTP Error: {e}")
+            print(f"Error code: {e.smtp_code}")
+            print(f"Error message: {e.smtp_error}")
+            return False
+
+        # Send email
+        print("Sending email...")
+        server.send_message(msg)
+        print("Email sent successfully!")
+        server.quit()
+        return True
+
     except Exception as e:
-        print(f"Unexpected error sending email: {str(e)}")
+        print(f"Unexpected error in send_reset_email: {str(e)}")
         print(f"Error type: {type(e).__name__}")
-        st.error(f"An unexpected error occurred while sending the email: {str(e)}")
+        import traceback
+        print(f"Traceback: {traceback.format_exc()}")
         return False
 
 def request_password_reset(email):
