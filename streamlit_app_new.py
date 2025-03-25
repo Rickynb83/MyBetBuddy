@@ -685,53 +685,9 @@ st.markdown("""
 # App title
 st.title("⚽ MyBetBuddy - Football Match Predictions")
 
-# Add device detection
-st.markdown("""
-<script>
-    // Device detection
-    document.addEventListener('DOMContentLoaded', function() {
-        const width = window.innerWidth;
-        const isMobile = width <= 640;
-        const isTablet = width > 640 && width <= 1024;
-        
-        // Send the device type to Streamlit
-        if (isMobile) {
-            window.parent.postMessage({
-                type: 'streamlit:setComponentValue',
-                value: 'mobile'
-            }, '*');
-        } else if (isTablet) {
-            window.parent.postMessage({
-                type: 'streamlit:setComponentValue',
-                value: 'tablet'
-            }, '*');
-        } else {
-            window.parent.postMessage({
-                type: 'streamlit:setComponentValue',
-                value: 'desktop'
-            }, '*');
-        }
-    });
-</script>
-""", unsafe_allow_html=True)
-
-# Initialize device type in session state
-if 'device_type' not in st.session_state:
-    st.session_state.device_type = 'desktop'
-    st.session_state.mobile_view = False
-
-# Create a layout with two columns for the title area
-title_col1, title_col2 = st.columns([3, 1])
-
-# Add instructions button in the right column
-with title_col2:
-    # Initialize session state for instructions visibility if it doesn't exist
-    if 'show_instructions' not in st.session_state:
-        st.session_state.show_instructions = False
-    
-    # Create the Instructions button
-    if st.button("Instructions", key="instructions_button"):
-        st.session_state.show_instructions = not st.session_state.show_instructions
+# Add instructions button below the title
+if st.button("📖 Instructions", key="instructions_button"):
+    st.session_state.show_instructions = not st.session_state.show_instructions
 
 # Display instructions if the button has been clicked
 if st.session_state.show_instructions:
@@ -742,16 +698,6 @@ if st.session_state.show_instructions:
     3. Once you have selected all your fixtures, select Analyze Selected Fixtures to view the predictions
     4. On the Match Analysis table, on the Additional Analysis, there is a drop down menu with additional analysis
     """)
-
-# Add refresh button
-if st.button("🔄 Refresh Data"):
-    # Clear all caches
-    st.cache_data.clear()
-    # Clear all session state except authentication
-    for key in list(st.session_state.keys()):
-        if key not in ['authentication_status', 'username', 'name']:
-            del st.session_state[key]
-    st.rerun()
 
 # Fetch standings
 standings = fetch_standings()
@@ -1252,27 +1198,10 @@ if standings:
             }
         )
 
-        # Add analyze and instructions buttons in the same row
-        col1, col2 = st.columns([1, 4])
-        with col1:
-            if st.button("Analyze Selected Fixtures"):
-                st.session_state.show_analysis = True
-                st.rerun()
-        with col2:
-            if st.button("📖 Instructions"):
-                st.session_state.show_instructions = not st.session_state.show_instructions
-                st.rerun()
-
-        # Display instructions if the button has been clicked
-        if st.session_state.show_instructions:
-            st.info("""
-            ### Instructions
-            1. Toggle between leagues to view upcoming fixtures
-            2. Select fixtures from the fixtures list to be analysed
-            3. Once you have selected all your fixtures, select Analyze Selected Fixtures to view the predictions
-            4. On the Match Analysis table, on the Additional Analysis, there is a drop down menu with additional analysis
-            5. Use the Export Analysis button to download the analysis in Excel format
-            """)
+        # Add analyze button
+        if st.button("Analyze Selected Fixtures"):
+            st.session_state.show_analysis = True
+            st.rerun()
 
         # Display analysis if enabled
         if st.session_state.show_analysis:
