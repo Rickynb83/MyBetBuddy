@@ -21,6 +21,7 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from email.utils import formatdate
 from supabase import create_client, Client
+import bcrypt
 
 # Add the current directory to the Python path
 current_dir = Path(__file__).parent
@@ -53,7 +54,7 @@ def authenticate_user(username, password):
         if user.data and len(user.data) > 0:
             user_data = user.data[0]
             # Verify password
-            if verify_password(password, user_data['password']):
+            if verify_password(user_data['password'], password):
                 return user_data
         return None
     except Exception as e:
@@ -68,7 +69,7 @@ def send_reset_email(email, reset_token):
     """Send password reset email using Zoho Mail"""
     try:
         # Get Zoho credentials from environment variables
-        zoho_password = os.getenv('ZOHO_MAIL_PASSWORD')
+        zoho_password = os.getenv('ZOHO_EMAIL_PASSWORD')
         if not zoho_password:
             print("Error: Zoho password not found in environment variables")
             st.error("Email configuration error: Zoho password not found")
@@ -217,7 +218,7 @@ def register_user(username, email, password):
             st.error(f"Email not in whitelist. Please contact the administrator.")
             return False
             
-        # Hash the password
+        # Hash the password using bcrypt
         hashed_password = hash_password(password)
         
         # Insert new user into Supabase
@@ -237,6 +238,18 @@ def register_user(username, email, password):
     except Exception as e:
         st.error(f"Registration error: {str(e)}")
         return False
+
+def verify_password(stored_password, provided_password):
+    """Verify a password against its hash"""
+    try:
+        return bcrypt.checkpw(provided_password.encode('utf-8'), stored_password.encode('utf-8'))
+    except Exception as e:
+        print(f"Password verification error: {e}")
+        return False
+
+def hash_password(password):
+    """Create a hashed password using bcrypt"""
+    return bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
 
 # Set page config (must be the first Streamlit command)
 st.set_page_config(
@@ -258,10 +271,6 @@ def load_whitelist():
     except Exception as e:
         st.error(f"Error loading whitelist: {e}")
         return []
-
-def hash_password(password):
-    """Create a hashed password"""
-    return hashlib.sha256(password.encode()).hexdigest()
 
 def load_users():
     """Load users from credentials file"""
@@ -305,10 +314,12 @@ if not DEVELOPMENT_MODE:
                 user = authenticate_user(username, password)
                 if user:
                     st.session_state.authenticated = True
+                    st.session_state.username = username
                     st.session_state.user = user
                     st.rerun()
                 else:
                     st.error("Invalid username or password")
+                    print(f"Login failed for username: {username}")  # Debug print
         
         with tab2:
             st.subheader("Register New Account")
@@ -328,6 +339,7 @@ if not DEVELOPMENT_MODE:
                 else:
                     # Register user in Supabase
                     if register_user(reg_username, reg_email, reg_password):
+                        st.success("Registration successful! Please login.")
                         st.rerun()  # Rerun to show login form
         
         with tab3:
