@@ -101,7 +101,7 @@ def send_reset_email(email, reset_token):
 
         # Connect to Zoho Mail SMTP server using SSL
         print("Attempting to connect to Zoho SMTP server...")
-        server = smtplib.SMTP_SSL('smtp.zoho.com', 465)
+        server = smtplib.SMTP_SSL('smtppro.zoho.eu', 465)
         
         print("Attempting to login with credentials...")
         try:
