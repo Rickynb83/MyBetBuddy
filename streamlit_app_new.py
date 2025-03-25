@@ -113,7 +113,7 @@ def send_reset_email(email, reset_token):
         
         print("Connecting to Zoho Mail SMTP server...")
         # Create SMTP session with Zoho Mail settings
-        with smtplib.SMTP_SSL('smtppro.zoho.eu', 465) as server:  # Use SSL port 465
+        with smtplib.SMTP_SSL('smtp.zoho.com', 465) as server:  # Use Zoho's main SMTP server
             print("Attempting to login...")
             server.login(sender_email, sender_password)
             print("Login successful, sending message...")
@@ -122,13 +122,17 @@ def send_reset_email(email, reset_token):
         
         return True
         
+    except smtplib.SMTPAuthenticationError as e:
+        print(f"SMTP Authentication Error: {str(e)}")
+        st.error("Failed to authenticate with Zoho Mail. Please check your email credentials.")
+        return False
+    except smtplib.SMTPException as e:
+        print(f"SMTP Error: {str(e)}")
+        st.error(f"Failed to send email: {str(e)}")
+        return False
     except Exception as e:
-        print(f"Error sending email: {str(e)}")
-        if hasattr(e, 'smtp_error'):
-            print(f"SMTP Error: {e.smtp_error}")
-        if hasattr(e, 'smtp_code'):
-            print(f"SMTP Code: {e.smtp_code}")
-        st.error(f"Failed to send reset email: {str(e)}")
+        print(f"Unexpected error sending email: {str(e)}")
+        st.error(f"An unexpected error occurred while sending the email: {str(e)}")
         return False
 
 def request_password_reset(email):
