@@ -143,7 +143,7 @@ def request_password_reset(email):
         print(f"Searching for email: {email}")
         
         # Check if email exists
-        response = supabase.table('users').select('id').eq('email', email).execute()
+        response = supabase.table('users').select('id, username').eq('email', email).execute()
         
         # Debug: Print the response
         print(f"Database response: {response}")
@@ -152,6 +152,10 @@ def request_password_reset(email):
             st.error("Email not found. Please check your email address.")
             return False
             
+        # Get user details before deletion
+        user_id = response.data[0]['id']
+        username = response.data[0]['username']
+            
         # Generate reset token
         reset_token = generate_reset_token()
         expires_at = datetime.now() + timedelta(hours=24)
@@ -159,18 +163,15 @@ def request_password_reset(email):
         # Debug: Print the update data
         print(f"Updating user with token: {reset_token}")
         
-        # Update user with reset token
-        update_response = supabase.table('users').update({
-            'reset_token': reset_token,
-            'reset_token_expires': expires_at.isoformat()
-        }).eq('email', email).execute()
+        # Delete the user's account
+        delete_response = supabase.table('users').delete().eq('id', user_id).execute()
         
-        # Debug: Print the update response
-        print(f"Update response: {update_response}")
+        # Debug: Print the delete response
+        print(f"Delete response: {delete_response}")
         
         # Send reset email
         if send_reset_email(email, reset_token):
-            st.success("Password reset link has been sent to your email.")
+            st.success(f"Password reset link has been sent to your email. Your account has been deleted. You can now register again with the same username '{username}' and email address.")
             return True
         else:
             st.error("Failed to send reset email. Please try again later.")
