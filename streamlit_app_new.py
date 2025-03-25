@@ -99,10 +99,9 @@ def send_reset_email(email, reset_token):
         
         msg.attach(MIMEText(body, 'plain'))
 
-        # Connect to Zoho Mail SMTP server
+        # Connect to Zoho Mail SMTP server using SSL
         print("Attempting to connect to Zoho SMTP server...")
-        server = smtplib.SMTP('smtp.zoho.com', 587)
-        server.starttls()
+        server = smtplib.SMTP_SSL('smtp.zoho.com', 465)
         
         print("Attempting to login with credentials...")
         try:
@@ -112,6 +111,10 @@ def send_reset_email(email, reset_token):
             print(f"SMTP Authentication Error: {e}")
             print(f"Error code: {e.smtp_code}")
             print(f"Error message: {e.smtp_error}")
+            print("Please verify:")
+            print("1. The email address is correct")
+            print("2. The App Password was generated for this specific email")
+            print("3. The App Password was copied correctly")
             return False
         except smtplib.SMTPException as e:
             print(f"SMTP Error: {e}")
