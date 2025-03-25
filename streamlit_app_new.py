@@ -22,6 +22,7 @@ from email.mime.multipart import MIMEMultipart
 from email.utils import formatdate
 from supabase import create_client, Client
 import bcrypt
+from io import BytesIO
 
 # Add the current directory to the Python path
 current_dir = Path(__file__).parent
@@ -100,7 +101,7 @@ def send_reset_email(email, reset_token):
         
         {reset_link}
         
-        This link will expire in 1 hour.
+        This link will expire in 24 hours.
         
         If you did not request this password reset, please ignore this email.
         
@@ -127,6 +128,7 @@ def send_reset_email(email, reset_token):
             print(f"SMTP Error: {e.smtp_error}")
         if hasattr(e, 'smtp_code'):
             print(f"SMTP Code: {e.smtp_code}")
+        st.error(f"Failed to send reset email: {str(e)}")
         return False
 
 def request_password_reset(email):
@@ -1258,8 +1260,19 @@ if standings:
                 st.rerun()
         with col2:
             if st.button("📖 Instructions"):
-                st.session_state.show_instructions = True
+                st.session_state.show_instructions = not st.session_state.show_instructions
                 st.rerun()
+
+        # Display instructions if the button has been clicked
+        if st.session_state.show_instructions:
+            st.info("""
+            ### Instructions
+            1. Toggle between leagues to view upcoming fixtures
+            2. Select fixtures from the fixtures list to be analysed
+            3. Once you have selected all your fixtures, select Analyze Selected Fixtures to view the predictions
+            4. On the Match Analysis table, on the Additional Analysis, there is a drop down menu with additional analysis
+            5. Use the Export Analysis button to download the analysis in Excel format
+            """)
 
         # Display analysis if enabled
         if st.session_state.show_analysis:
@@ -1422,8 +1435,7 @@ if standings:
                 'Home Win %', 'Draw %', 'Away Win %',
                 'Prediction', 'Predicted Result',
                 'Prediction Details',  # This contains winner, advice, win_or_draw, under_over, and goals
-                'Source',
-                'View Details'
+                'Additional Analysis'  # Renamed from 'View Details'
             ]
 
             # For mobile view or compact tables, show fewer columns
@@ -1431,7 +1443,7 @@ if standings:
                 display_columns = [
                     'Home Team', 'Away Team',
                     'Prediction', 'Predicted Result',
-                    'View Details'
+                    'Additional Analysis'
                 ]
 
             # Ensure all columns exist and remove any duplicates
@@ -1439,6 +1451,51 @@ if standings:
 
             # Create a unique key for the data editor
             editor_key = f"analysis_editor_{len(st.session_state.selected_fixtures)}"
+            
+            # Add export button before the table
+            if st.button("📥 Export Analysis"):
+                # Create Excel writer
+                output = BytesIO()
+                with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+                    analysis_df.to_excel(writer, sheet_name='Match Analysis', index=False)
+                    
+                    # Get the workbook and the worksheet
+                    workbook = writer.book
+                    worksheet = writer.sheets['Match Analysis']
+                    
+                    # Add formats
+                    header_format = workbook.add_format({
+                        'bold': True,
+                        'text_wrap': True,
+                        'valign': 'top',
+                        'align': 'center',
+                        'bg_color': '#38003c',
+                        'font_color': 'white',
+                        'border': 1
+                    })
+                    
+                    # Format the header row
+                    for col_num, value in enumerate(analysis_df.columns.values):
+                        worksheet.write(0, col_num, value, header_format)
+                    
+                    # Auto-adjust column widths
+                    for idx, col in enumerate(analysis_df):
+                        max_length = max(
+                            analysis_df[col].astype(str).apply(len).max(),
+                            len(str(col))
+                        )
+                        worksheet.set_column(idx, idx, max_length + 2)
+                
+                # Get the value of the BytesIO buffer and write it to the response
+                excel_data = output.getvalue()
+                
+                # Create a download button
+                st.download_button(
+                    label="Download Excel File",
+                    data=excel_data,
+                    file_name="match_analysis.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
             
             # Display the analysis table with a dropdown for each row
             edited_df = st.data_editor(
@@ -1455,9 +1512,8 @@ if standings:
                     "Away Win %": st.column_config.TextColumn("A%", width=60),
                     "Prediction": st.column_config.TextColumn("Pred", width=70),
                     "Predicted Result": st.column_config.TextColumn("Result", width=80),
-                    "Source": st.column_config.TextColumn("Src", width=70),
-                    "View Details": st.column_config.SelectboxColumn(
-                        "More",  # Even shorter display name
+                    "Additional Analysis": st.column_config.SelectboxColumn(
+                        "Additional Analysis",
                         options=[
                             "Select Analysis",
                             "Head-to-Head",
@@ -1474,7 +1530,7 @@ if standings:
                         width=120
                     ),
                     "Prediction Details": st.column_config.TextColumn(
-                        "Alt", 
+                        "Details", 
                         width=120
                     )
                 }
@@ -1484,8 +1540,8 @@ if standings:
             for idx, row in edited_df.iterrows():
                 fixture_key = f"{row['Home Team']} vs {row['Away Team']} ({row['Date']})"
                 current_selection = st.session_state.analysis_selections.get(fixture_key, "Select Analysis")
-                if row['View Details'] != current_selection:
-                    st.session_state.analysis_selections[fixture_key] = row['View Details']
+                if row['Additional Analysis'] != current_selection:
+                    st.session_state.analysis_selections[fixture_key] = row['Additional Analysis']
                     st.rerun()
             
             # Create a container for detailed analysis
