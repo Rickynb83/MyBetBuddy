@@ -804,9 +804,6 @@ def handle_fixture_selection(key, selected):
         away_team = away_team_date[0]
         date = away_team_date[1].rstrip(")")
         
-        # Flag to track if changes were made
-        changes_made = False
-        
         # Find the fixture in the session state
         fixture_found = False
         for i, fixture in enumerate(st.session_state.selected_fixtures):
@@ -818,7 +815,6 @@ def handle_fixture_selection(key, selected):
                 if not selected:
                     st.session_state.selected_fixtures.pop(i)
                     print(f"Removed fixture: {key}")
-                    changes_made = True
                 fixture_found = True
                 break
         
@@ -878,7 +874,6 @@ def handle_fixture_selection(key, selected):
                                     st.session_state.selected_fixtures.append(fixture_dict)
                                     print(f"Added fixture to selected_fixtures: {fixture_dict}")
                                     print(f"Current selected fixtures count: {len(st.session_state.selected_fixtures)}")
-                                    changes_made = True
                                     break
                 except Exception as e:
                     print(f"Error finding fixture in {league_name}: {e}")
@@ -888,8 +883,13 @@ def handle_fixture_selection(key, selected):
     for i, fixture in enumerate(st.session_state.selected_fixtures[:3]):  # Show first 3 for debugging
         print(f"Fixture {i+1}: {fixture.get('Home Team')} vs {fixture.get('Away Team')} ({fixture.get('Date')})")
     
-    # Always trigger a rerun to ensure the UI reflects the change
-    st.rerun()
+    # Only rerun if there were actual changes
+    if 'last_selection' not in st.session_state:
+        st.session_state.last_selection = None
+    
+    if st.session_state.last_selection != key:
+        st.session_state.last_selection = key
+        st.rerun()
 
 # Display standings if available
 if standings:
@@ -1135,6 +1135,45 @@ if standings:
                             if st.session_state.last_editor_state.get(editor_key) != current_state:
                                 st.session_state.last_editor_state[editor_key] = current_state
                                 st.rerun()
+
+                    # Add select/deselect all buttons below the table
+                    if st.button("Select/Deselect All", key=f"toggle_all_{league}"):
+                        # Check if all fixtures are currently selected
+                        all_selected = all(fixture_key in selected_keys for _, row in fixtures_df.iterrows() for fixture_key in [row['key']])
+                        
+                        if all_selected:
+                            # Deselect all fixtures
+                            for _, row in fixtures_df.iterrows():
+                                fixture_key = row['key']
+                                if fixture_key in selected_keys:
+                                    # Remove fixture from session state
+                                    st.session_state.selected_fixtures = [
+                                        f for f in st.session_state.selected_fixtures 
+                                        if not (f['Home Team'] == row['Home Team'] and 
+                                               f['Away Team'] == row['Away Team'] and 
+                                               f['Date'] == row['Date'])
+                                    ]
+                        else:
+                            # Select all fixtures
+                            for _, row in fixtures_df.iterrows():
+                                fixture_key = row['key']
+                                if fixture_key not in selected_keys:
+                                    # Add fixture directly to session state
+                                    fixture_dict = {
+                                        'Date': row['Date'],
+                                        'Home Position': row['Home Position'],
+                                        'Home Team': row['Home Team'],
+                                        'Away Team': row['Away Team'],
+                                        'Away Position': row['Away Position'],
+                                        'fixture_id': row['fixture_id'],
+                                        'home_team_id': row['home_team_id'],
+                                        'away_team_id': row['away_team_id'],
+                                        'venue': row['venue'],
+                                        'league': league
+                                    }
+                                    st.session_state.selected_fixtures.append(fixture_dict)
+                                    print(f"Added fixture to selected_fixtures: {fixture_dict}")
+                        st.rerun()
 
     # Display selected fixtures and analysis
     if st.session_state.selected_fixtures:
