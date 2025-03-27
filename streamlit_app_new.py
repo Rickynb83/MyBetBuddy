@@ -804,6 +804,9 @@ def handle_fixture_selection(key, selected):
         away_team = away_team_date[0]
         date = away_team_date[1].rstrip(")")
         
+        # Flag to track if changes were made
+        changes_made = False
+        
         # Find the fixture in the session state
         fixture_found = False
         for i, fixture in enumerate(st.session_state.selected_fixtures):
@@ -815,6 +818,7 @@ def handle_fixture_selection(key, selected):
                 if not selected:
                     st.session_state.selected_fixtures.pop(i)
                     print(f"Removed fixture: {key}")
+                    changes_made = True
                 fixture_found = True
                 break
         
@@ -874,6 +878,7 @@ def handle_fixture_selection(key, selected):
                                     st.session_state.selected_fixtures.append(fixture_dict)
                                     print(f"Added fixture to selected_fixtures: {fixture_dict}")
                                     print(f"Current selected fixtures count: {len(st.session_state.selected_fixtures)}")
+                                    changes_made = True
                                     break
                 except Exception as e:
                     print(f"Error finding fixture in {league_name}: {e}")
@@ -883,13 +888,8 @@ def handle_fixture_selection(key, selected):
     for i, fixture in enumerate(st.session_state.selected_fixtures[:3]):  # Show first 3 for debugging
         print(f"Fixture {i+1}: {fixture.get('Home Team')} vs {fixture.get('Away Team')} ({fixture.get('Date')})")
     
-    # Only rerun if there were actual changes
-    if 'last_selection' not in st.session_state:
-        st.session_state.last_selection = None
-    
-    if st.session_state.last_selection != key:
-        st.session_state.last_selection = key
-        st.rerun()
+    # Always trigger a rerun to ensure the UI reflects the change
+    st.rerun()
 
 # Display standings if available
 if standings:
@@ -1093,6 +1093,10 @@ if standings:
                         # Create a unique key for the data editor
                         editor_key = f"fixtures_editor_{league}"
                         
+                        # Add a session state key for this editor if it doesn't exist
+                        if f"previous_{editor_key}" not in st.session_state:
+                            st.session_state[f"previous_{editor_key}"] = {}
+                        
                         # Display the fixtures table with selectable rows
                         edited_df = st.data_editor(
                             fixtures_df[['Select', 'Home Team', 'Home Position', 'Away Team', 'Away Position', 'Date']],
@@ -1110,31 +1114,34 @@ if standings:
                                 "Away Team": st.column_config.TextColumn("Away", width=150),
                                 "Away Position": st.column_config.TextColumn("Pos", width=50),
                                 "Date": st.column_config.TextColumn("Date", width=100)
-                            }
+                            },
+                            on_change=lambda: None  # Force immediate update
                         )
 
-                        # Handle selection changes using Streamlit's native selection handling
+                        # Handle selection changes
                         if edited_df is not None:
-                            for idx, row in edited_df.iterrows():
-                                fixture_key = fixtures_df.iloc[idx]['key']
-                                is_selected = row['Select']
-                                
-                                # Check if the selection state has changed
-                                if fixture_key in selected_keys and not is_selected:
-                                    # Fixture was deselected
-                                    handle_fixture_selection(fixture_key, False)
-                                elif fixture_key not in selected_keys and is_selected:
-                                    # Fixture was selected
-                                    handle_fixture_selection(fixture_key, True)
-                        
-                            # Only rerun if there were actual changes
-                            if 'last_editor_state' not in st.session_state:
-                                st.session_state.last_editor_state = {}
+                            # Create a dictionary to track current selection state
+                            current_selections = {}
                             
-                            current_state = str(edited_df['Select'].tolist())
-                            if st.session_state.last_editor_state.get(editor_key) != current_state:
-                                st.session_state.last_editor_state[editor_key] = current_state
-                                st.rerun()
+                            for idx, row in edited_df.iterrows():
+                                if idx < len(fixtures_df):  # Ensure we don't exceed fixtures_df bounds
+                                    fixture_key = fixtures_df.iloc[idx]['key']
+                                    is_selected = bool(row['Select'])
+                                    current_selections[fixture_key] = is_selected
+                                    
+                                    # Get previous selection state
+                                    prev_selected = st.session_state[f"previous_{editor_key}"].get(fixture_key, None)
+                                    
+                                    # If this is the first time or selection changed
+                                    if prev_selected is None or prev_selected != is_selected:
+                                        print(f"Selection changed for {fixture_key}: {prev_selected} -> {is_selected}")
+                                        # Update selection
+                                        handle_fixture_selection(fixture_key, is_selected)
+                                        # Update previous state
+                                        st.session_state[f"previous_{editor_key}"][fixture_key] = is_selected
+                            
+                            # Store current selections for next comparison
+                            st.session_state[f"previous_{editor_key}"] = current_selections
 
                     # Add select/deselect all buttons below the table
                     if st.button("Select/Deselect All", key=f"toggle_all_{league}"):
