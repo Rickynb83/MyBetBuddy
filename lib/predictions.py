@@ -10,6 +10,7 @@ from concurrent.futures import ThreadPoolExecutor
 import time
 from lib.cache import cache
 import os
+import traceback
 
 # Suppress warnings
 warnings.filterwarnings('ignore', category=UserWarning)
@@ -262,15 +263,43 @@ def calculate_poisson_probabilities(home_team_stats, away_team_stats, h2h_stats)
     """
     Calculate match outcome probabilities using Poisson distribution.
     """
+    print(f"DEBUG: calculate_poisson_probabilities - Starting calculation")
+    
+    # Safely extract metrics
+    home_metrics = home_team_stats.get('metrics', {})
+    if not isinstance(home_metrics, dict):
+        print(f"DEBUG: Home metrics is not a dict: {type(home_metrics)}")
+        home_metrics = {}
+    
+    away_metrics = away_team_stats.get('metrics', {})
+    if not isinstance(away_metrics, dict):
+        print(f"DEBUG: Away metrics is not a dict: {type(away_metrics)}")
+        away_metrics = {}
+    
     # Base expected goals calculation using correct metrics path
-    home_base_xg = home_team_stats.get('metrics', {}).get('goals_per_game', 1.5)
-    away_base_xg = away_team_stats.get('metrics', {}).get('goals_per_game', 1.5)
+    home_base_xg = home_metrics.get('goals_per_game', 1.5)
+    away_base_xg = away_metrics.get('goals_per_game', 1.5)
+    
+    print(f"DEBUG: Base xG values - Home: {home_base_xg}, Away: {away_base_xg}")
+    
+    # Safely extract strengths
+    home_strength = home_team_stats.get('strength', {})
+    if not isinstance(home_strength, dict):
+        print(f"DEBUG: Home strength is not a dict: {type(home_strength)}")
+        home_strength = {}
+        
+    away_strength = away_team_stats.get('strength', {})
+    if not isinstance(away_strength, dict):
+        print(f"DEBUG: Away strength is not a dict: {type(away_strength)}")
+        away_strength = {}
     
     # Get team strengths with safe defaults
-    home_attack = home_team_stats.get('strength', {}).get('attack_strength', 1.0)
-    home_defense = home_team_stats.get('strength', {}).get('defense_strength', 1.0)
-    away_attack = away_team_stats.get('strength', {}).get('attack_strength', 1.0)
-    away_defense = away_team_stats.get('strength', {}).get('defense_strength', 1.0)
+    home_attack = home_strength.get('attack_strength', 1.0)
+    home_defense = home_strength.get('defense_strength', 1.0)
+    away_attack = away_strength.get('attack_strength', 1.0)
+    away_defense = away_strength.get('defense_strength', 1.0)
+    
+    print(f"DEBUG: Team strengths - Home: attack={home_attack}, defense={home_defense}, Away: attack={away_attack}, defense={away_defense}")
     
     # Check if teams are closely matched based on multiple factors
     strength_diff = abs(home_attack - away_attack)
@@ -284,6 +313,9 @@ def calculate_poisson_probabilities(home_team_stats, away_team_stats, h2h_stats)
     is_close_match = (strength_diff < 0.2 and 
                      position_diff <= 5 and 
                      points_diff <= 10)
+    
+    print(f"DEBUG: Match analysis - strength_diff={strength_diff}, position_diff={position_diff}, points_diff={points_diff}")
+    print(f"DEBUG: Is close match: {is_close_match}")
     
     # Apply home/away adjustments based on whether teams are closely matched
     if is_close_match:
@@ -301,11 +333,14 @@ def calculate_poisson_probabilities(home_team_stats, away_team_stats, h2h_stats)
         home_xg *= min(1.2, max(0.8, home_attack / away_defense))    # Reduced adjustment range
         away_xg *= min(1.2, max(0.8, away_attack / home_defense))    # Reduced adjustment range
     
+    print(f"DEBUG: After adjustments - Home xG: {home_xg}, Away xG: {away_xg}")
+    
     # Apply h2h adjustment if available
-    if h2h_stats and 'h2h_factor' in h2h_stats:
+    if isinstance(h2h_stats, dict) and 'h2h_factor' in h2h_stats:
         h2h_factor = min(1.1, max(0.9, h2h_stats['h2h_factor']))  # Reduced h2h impact
         home_xg *= h2h_factor
         away_xg /= h2h_factor
+        print(f"DEBUG: Applied H2H factor: {h2h_factor}, New Home xG: {home_xg}, Away xG: {away_xg}")
     
     # Calculate score probabilities
     max_goals = 10
@@ -319,6 +354,8 @@ def calculate_poisson_probabilities(home_team_stats, away_team_stats, h2h_stats)
     home_win_prob = np.sum(np.tril(score_probs, -1))
     away_win_prob = np.sum(np.triu(score_probs, 1))
     draw_prob = np.sum(np.diag(score_probs))
+    
+    print(f"DEBUG: Initial probabilities - Home: {home_win_prob:.4f}, Draw: {draw_prob:.4f}, Away: {away_win_prob:.4f}")
     
     # Cap maximum probabilities to ensure realistic values
     if home_win_prob > 0.75:
@@ -352,6 +389,8 @@ def calculate_poisson_probabilities(home_team_stats, away_team_stats, h2h_stats)
     home_win_prob /= total
     away_win_prob /= total
     draw_prob /= total
+    
+    print(f"DEBUG: Final probabilities - Home: {home_win_prob:.4f}, Draw: {draw_prob:.4f}, Away: {away_win_prob:.4f}")
     
     return {
         'probabilities': {
@@ -992,39 +1031,70 @@ def predict_match(home_team_id: int, away_team_id: int, league_id: int) -> Dict:
         
         # Get team statistics with error handling
         home_team_stats = get_team_statistics(home_team_id, league_id)
+        print(f"DEBUG: Got home team stats, available: {home_team_stats.get('available', False)}")
         if not home_team_stats.get('available', False):
-            print(f"DEBUG: Home team stats not available for {home_team_id}")
+            print(f"DEBUG: Home team stats not available for {home_team_id}, using defaults")
             home_team_stats = create_default_stats()
             
         away_team_stats = get_team_statistics(away_team_id, league_id)
+        print(f"DEBUG: Got away team stats, available: {away_team_stats.get('available', False)}")
         if not away_team_stats.get('available', False):
-            print(f"DEBUG: Away team stats not available for {away_team_id}")
+            print(f"DEBUG: Away team stats not available for {away_team_id}, using defaults")
             away_team_stats = create_default_stats()
         
         # Calculate team strengths
+        print(f"DEBUG: Calculating team strength indices")
         home_team_stats['strength'] = calculate_team_strength_index(home_team_stats)
         away_team_stats['strength'] = calculate_team_strength_index(away_team_stats)
         
         # Get h2h stats with timeout protection
         try:
+            print(f"DEBUG: Getting head-to-head statistics")
             h2h_stats = get_h2h_statistics(home_team_id, away_team_id)
         except Exception as e:
             print(f"DEBUG: H2H stats unavailable: {str(e)}")
             h2h_stats = {'h2h_factor': 1.0}
         
         # Calculate probabilities using Poisson distribution
+        print(f"DEBUG: Calculating Poisson probabilities")
         prediction = calculate_poisson_probabilities(home_team_stats, away_team_stats, h2h_stats)
+        print(f"DEBUG: Poisson calculation complete, probabilities: {prediction['probabilities']}")
         
-        # Add metadata - FIX: Using proper dict.get() syntax without keyword arguments
+        # Access nested dictionaries safely, avoiding nested dict.get() which can cause errors
+        print(f"DEBUG: Preparing metadata section")
+        # Extract confidence values separately
         home_strength = home_team_stats.get('strength', {})
+        if not isinstance(home_strength, dict):
+            print(f"DEBUG: Home strength is not a dict: {type(home_strength)}")
+            home_strength = {}
+            
         away_strength = away_team_stats.get('strength', {})
+        if not isinstance(away_strength, dict):
+            print(f"DEBUG: Away strength is not a dict: {type(away_strength)}")
+            away_strength = {}
+            
         home_confidence = home_strength.get('confidence', 'low')
         away_confidence = away_strength.get('confidence', 'low')
         
+        # Get fixture data safely
+        home_fixtures = home_team_stats.get('fixtures', {})
+        if not isinstance(home_fixtures, dict):
+            print(f"DEBUG: Home fixtures is not a dict: {type(home_fixtures)}")
+            home_fixtures = {}
+            
+        away_fixtures = away_team_stats.get('fixtures', {})
+        if not isinstance(away_fixtures, dict):
+            print(f"DEBUG: Away fixtures is not a dict: {type(away_fixtures)}")
+            away_fixtures = {}
+        
+        home_games = home_fixtures.get('played', 0)
+        away_games = away_fixtures.get('played', 0)
+        
+        # Add metadata
         prediction['metadata'] = {
             'confidence': min(home_confidence, away_confidence),
-            'home_games_analyzed': home_team_stats.get('fixtures', {}).get('played', 0),
-            'away_games_analyzed': away_team_stats.get('fixtures', {}).get('played', 0)
+            'home_games_analyzed': home_games,
+            'away_games_analyzed': away_games
         }
         
         # Add team analysis
@@ -1032,12 +1102,12 @@ def predict_match(home_team_id: int, away_team_id: int, league_id: int) -> Dict:
             'home': {
                 'form': home_team_stats.get('form', 'Unknown'),
                 'recent_performance': home_team_stats.get('recent_form', {}),
-                'strength_index': home_team_stats.get('strength', {})
+                'strength_index': home_strength
             },
             'away': {
                 'form': away_team_stats.get('form', 'Unknown'),
                 'recent_performance': away_team_stats.get('recent_form', {}),
-                'strength_index': away_team_stats.get('strength', {})
+                'strength_index': away_strength
             }
         }
         
@@ -1052,6 +1122,7 @@ def predict_match(home_team_id: int, away_team_id: int, league_id: int) -> Dict:
         
         # Calculate cards prediction
         try:
+            print(f"DEBUG: Calculating cards prediction")
             home_cards = analyze_cards(home_team_id, 
                                      home_team_stats.get('matches', []),
                                      h2h_stats.get('matches', []))
@@ -1082,11 +1153,12 @@ def predict_match(home_team_id: int, away_team_id: int, league_id: int) -> Dict:
             print(f"DEBUG: Cards prediction unavailable: {str(e)}")
             prediction['cards'] = create_default_cards()
         
-        print(f"DEBUG: Successful prediction for {home_team_id} vs {away_team_id}: {prediction['probabilities']}")
+        print(f"DEBUG: Successful prediction for {home_team_id} vs {away_team_id}")
         return prediction
         
     except Exception as e:
-        print(f"DEBUG: Error in prediction: {str(e)}")
+        print(f"ERROR in prediction: {str(e)}")
+        print(f"Stack trace: ", traceback.format_exc())
         return create_fallback_prediction()
 
 def create_default_stats():
