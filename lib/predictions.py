@@ -1015,10 +1015,14 @@ def predict_match(home_team_id: int, away_team_id: int, league_id: int) -> Dict:
         # Calculate probabilities using Poisson distribution
         prediction = calculate_poisson_probabilities(home_team_stats, away_team_stats, h2h_stats)
         
-        # Add metadata
+        # Add metadata - FIX: Using proper dict.get() syntax without keyword arguments
+        home_strength = home_team_stats.get('strength', {})
+        away_strength = away_team_stats.get('strength', {})
+        home_confidence = home_strength.get('confidence', 'low')
+        away_confidence = away_strength.get('confidence', 'low')
+        
         prediction['metadata'] = {
-            'confidence': min(home_team_stats.get('strength', {}).get('confidence', 'low'),
-                            away_team_stats.get('strength', {}).get('confidence', 'low')),
+            'confidence': min(home_confidence, away_confidence),
             'home_games_analyzed': home_team_stats.get('fixtures', {}).get('played', 0),
             'away_games_analyzed': away_team_stats.get('fixtures', {}).get('played', 0)
         }
