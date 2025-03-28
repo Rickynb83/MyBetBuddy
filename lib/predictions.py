@@ -1959,8 +1959,13 @@ _cache_ttl = 60  # Cache for 1 minute
 def get_cached_prediction(home_team_id, away_team_id, league_id):
     """
     Get a cached prediction for a match, or calculate a new one if not cached.
-    Uses a simple in-memory cache with TTL.
+    Disables caching on Heroku environments.
     """
+    import os
+    
+    # Detect if running on Heroku (DYNO environment variable is set)
+    is_heroku = os.environ.get('DYNO') is not None
+    
     try:
         # Ensure proper types for all IDs
         home_id = int(home_team_id)
@@ -1971,14 +1976,26 @@ def get_cached_prediction(home_team_id, away_team_id, league_id):
             print(f"Invalid team or league ID: {home_id}, {away_id}, {league}")
             return create_fallback_prediction()
         
+        # On Heroku, don't try to use cache
+        if is_heroku:
+            # Add a unique key to the prediction to avoid all being the same
+            result = predict_match(home_id, away_id, league)
+            
+            # Validate result
+            if not result or not isinstance(result, dict):
+                print(f"Invalid prediction result type: {type(result)}")
+                return create_fallback_prediction()
+                
+            return result
+        
+        # For local development, use cache
         # Create a unique cache key
         cache_key = f"{home_id}_{away_id}_{league}"
         
-        # Check if prediction is in cache and not expired
-        if cache_key in _prediction_cache:
-            cached_time, prediction = _prediction_cache[cache_key]
-            if time.time() - cached_time < _cache_ttl:
-                return prediction
+        # Get from cache
+        cached_result = cache.cache_get(cache_key)
+        if cached_result:
+            return cached_result
         
         # Call prediction function with proper types
         result = predict_match(home_id, away_id, league)
@@ -1988,8 +2005,8 @@ def get_cached_prediction(home_team_id, away_team_id, league_id):
             print(f"Invalid prediction result type: {type(result)}")
             return create_fallback_prediction()
         
-        # Store in cache with timestamp
-        _prediction_cache[cache_key] = (time.time(), result)
+        # Store in cache
+        cache.cache_set(cache_key, result)
         
         return result
     except Exception as e:
