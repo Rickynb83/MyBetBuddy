@@ -8,6 +8,7 @@ import warnings
 import math
 from concurrent.futures import ThreadPoolExecutor
 import time
+from lib.cache import cache
 
 # Suppress warnings
 warnings.filterwarnings('ignore', category=UserWarning)
@@ -264,27 +265,48 @@ def calculate_poisson_probabilities(home_team_stats, away_team_stats, h2h_stats)
     home_base_xg = home_team_stats.get('metrics', {}).get('goals_per_game', 1.5)
     away_base_xg = away_team_stats.get('metrics', {}).get('goals_per_game', 1.5)
     
-    # Apply home/away adjustments (more conservative)
-    home_xg = home_base_xg * 1.1  # 10% boost for home advantage
-    away_xg = away_base_xg * 0.9  # 10% reduction for away disadvantage
-    
     # Get team strengths with safe defaults
     home_attack = home_team_stats.get('strength', {}).get('attack_strength', 1.0)
     home_defense = home_team_stats.get('strength', {}).get('defense_strength', 1.0)
     away_attack = away_team_stats.get('strength', {}).get('attack_strength', 1.0)
     away_defense = away_team_stats.get('strength', {}).get('defense_strength', 1.0)
     
-    # Apply attack vs defense adjustments (capped)
-    home_xg *= min(1.5, max(0.75, home_attack / away_defense))
-    away_xg *= min(1.5, max(0.75, away_attack / home_defense))
+    # Check if teams are closely matched based on multiple factors
+    strength_diff = abs(home_attack - away_attack)
+    position_diff = abs(home_team_stats.get('position', 0) - away_team_stats.get('position', 0))
+    points_diff = abs(home_team_stats.get('points', 0) - away_team_stats.get('points', 0))
     
-    # Apply h2h adjustment if available (with conservative caps)
+    # Teams are considered closely matched if:
+    # 1. Strength difference is small AND
+    # 2. Position difference is small (within 5 places) AND
+    # 3. Points difference is small (within 10 points)
+    is_close_match = (strength_diff < 0.2 and 
+                     position_diff <= 5 and 
+                     points_diff <= 10)
+    
+    # Apply home/away adjustments based on whether teams are closely matched
+    if is_close_match:
+        home_xg = home_base_xg * 1.01  # Minimal home advantage for close matches
+        away_xg = away_base_xg * 0.99  # Minimal away penalty for close matches
+    else:
+        home_xg = home_base_xg * 1.02   # Reduced home advantage
+        away_xg = away_base_xg * 0.98   # Reduced away penalty
+    
+    # Apply attack vs defense adjustments with more balanced weighting
+    if is_close_match:
+        home_xg *= min(1.1, max(0.9, home_attack / away_defense))  # Reduced adjustment range
+        away_xg *= min(1.1, max(0.9, away_attack / home_defense))  # Reduced adjustment range
+    else:
+        home_xg *= min(1.2, max(0.8, home_attack / away_defense))    # Reduced adjustment range
+        away_xg *= min(1.2, max(0.8, away_attack / home_defense))    # Reduced adjustment range
+    
+    # Apply h2h adjustment if available
     if h2h_stats and 'h2h_factor' in h2h_stats:
-        h2h_factor = min(1.3, max(0.8, h2h_stats['h2h_factor']))
+        h2h_factor = min(1.1, max(0.9, h2h_stats['h2h_factor']))  # Reduced h2h impact
         home_xg *= h2h_factor
         away_xg /= h2h_factor
     
-    # Calculate score probabilities using Poisson distribution
+    # Calculate score probabilities
     max_goals = 10
     score_probs = np.zeros((max_goals + 1, max_goals + 1))
     
@@ -297,25 +319,38 @@ def calculate_poisson_probabilities(home_team_stats, away_team_stats, h2h_stats)
     away_win_prob = np.sum(np.triu(score_probs, 1))
     draw_prob = np.sum(np.diag(score_probs))
     
-    # Normalize probabilities
-    total_prob = home_win_prob + away_win_prob + draw_prob
-    home_win_prob /= total_prob
-    away_win_prob /= total_prob
-    draw_prob /= total_prob
+    # Cap maximum probabilities to ensure realistic values
+    if home_win_prob > 0.75:
+        excess = home_win_prob - 0.75
+        home_win_prob = 0.75
+        draw_prob += excess * 0.6
+        away_win_prob += excess * 0.4
     
-    # Apply strength difference adjustments with conservative caps
-    strength_diff = min(1.5, max(0.75, home_team_stats.get('strength', {}).get('overall_strength', 1.0) / 
-                                        away_team_stats.get('strength', {}).get('overall_strength', 1.0)))
+    if away_win_prob > 0.65:
+        excess = away_win_prob - 0.65
+        away_win_prob = 0.65
+        draw_prob += excess * 0.6
+        home_win_prob += excess * 0.4
     
-    if strength_diff > 1.2:
-        home_win_prob = min(0.8, home_win_prob * 1.1)
-        away_win_prob = max(0.1, away_win_prob * 0.9)
+    # Ensure minimum probabilities
+    if draw_prob < 0.15:
+        shortage = 0.15 - draw_prob
+        draw_prob = 0.15
+        if home_win_prob > away_win_prob:
+            home_win_prob -= shortage
+        else:
+            away_win_prob -= shortage
+    
+    if away_win_prob < 0.10:
+        shortage = 0.10 - away_win_prob
+        away_win_prob = 0.10
+        home_win_prob -= shortage
     
     # Final normalization
-    total_prob = home_win_prob + away_win_prob + draw_prob
-    home_win_prob /= total_prob
-    away_win_prob /= total_prob
-    draw_prob /= total_prob
+    total = home_win_prob + away_win_prob + draw_prob
+    home_win_prob /= total
+    away_win_prob /= total
+    draw_prob /= total
     
     return {
         'probabilities': {
@@ -591,56 +626,82 @@ def analyze_head_to_head(h2h_matches: List[Dict], team1_id: int, team2_id: int) 
     
     # Calculate recent form (last 3 matches vs all matches)
     recent_dominance = np.mean(match_dominance[-3:]) if len(match_dominance) >= 3 else np.mean(match_dominance)
-    overall_dominance = np.mean(match_dominance)
+    overall_dominance = team1_wins / total_matches if total_matches > 0 else 0.5
+    weighted_dominance = (recent_dominance * 0.6) + (overall_dominance * 0.4)
     
     # Calculate venue advantage
-    home_matches = sum(1 for m in stats['recent_matches'] if m['venue'] == 'home')
-    home_goals_diff = sum(m['goal_difference'] for m in stats['recent_matches'] if m['venue'] == 'home')
-    away_goals_diff = sum(m['goal_difference'] for m in stats['recent_matches'] if m['venue'] == 'away')
+    home_matches = [match for match in h2h_matches if match['home_team'] == home_team_id]
+    home_wins = sum(1 for match in home_matches if match['home_goals'] > match['away_goals'])
+    venue_advantage = (home_wins / len(home_matches)) * 2 if home_matches else 1.0
     
-    venue_advantage = 0
-    if home_matches > 0:
-        home_avg = home_goals_diff / home_matches
-        away_matches = stats['total_matches'] - home_matches
-        away_avg = away_goals_diff / away_matches if away_matches > 0 else 0
-        venue_advantage = home_avg - away_avg
+    # Calculate result consistency
+    if total_matches >= 3:
+        results = [(match['home_team'] == home_team_id and match['home_goals'] > match['away_goals']) or
+                  (match['away_team'] == home_team_id and match['away_goals'] > match['home_goals'])
+                  for match in h2h_matches[-3:]]
+        consistency = sum(1 for i in range(len(results)-1) if results[i] == results[i+1]) / (len(results)-1)
+    else:
+        consistency = 0.5
     
-    # Calculate h2h factor (centered around 1.0)
-    base_h2h = 1.0 + (weighted_dominance * 0.2)  # ±0.2 based on historical dominance
-    recent_adj = (recent_dominance - overall_dominance) * 0.1  # ±0.1 based on recent form
-    consistency_adj = (result_consistency / 100) * 0.1  # 0 to 0.1 based on consistency
+    # Calculate h2h factor
+    h2h_factor = (weighted_dominance * 0.4 + venue_advantage * 0.4 + consistency * 0.2) * 1.5
     
-    h2h_factor = base_h2h + recent_adj + consistency_adj
-    
-    # Determine confidence level
-    confidence = 'high' if stats['total_matches'] >= 5 else \
-                'medium' if stats['total_matches'] >= 3 else 'low'
-    
-    return {
+    h2h_stats = {
         'h2h_factor': h2h_factor,
         'stats': {
-            'team1_wins': stats['team1_wins'],
-            'team2_wins': stats['team2_wins'],
-            'draws': stats['draws'],
-            'total_matches': stats['total_matches'],
-            'avg_team1_goals': stats['avg_team1_goals'],
-            'avg_team2_goals': stats['avg_team2_goals']
+            'team1_wins': team1_wins,
+            'team2_wins': team2_wins,
+            'draws': draws,
+            'total_matches': total_matches,
+            'avg_team1_goals': avg_team1_goals,
+            'avg_team2_goals': avg_team2_goals
         },
         'analysis': {
             'weighted_dominance': weighted_dominance,
             'recent_dominance': recent_dominance,
             'overall_dominance': overall_dominance,
-            'result_consistency': result_consistency,
+            'result_consistency': consistency,
             'venue_advantage': venue_advantage
         },
         'trends': {
-            'goal_differences': goal_differences,
-            'match_dominance': match_dominance,
-            'recent_matches': stats['recent_matches'][-3:]
+            'goal_differences': [
+                match['home_goals'] - match['away_goals'] 
+                if match['home_team'] == home_team_id
+                else match['away_goals'] - match['home_goals']
+                for match in h2h_matches[-5:]
+            ],
+            'match_dominance': [
+                1 if (match['home_team'] == home_team_id and match['home_goals'] > match['away_goals']) or
+                     (match['away_team'] == home_team_id and match['away_goals'] > match['home_goals'])
+                else 0 if match['home_goals'] != match['away_goals']
+                else 0.5
+                for match in h2h_matches[-5:]
+            ],
+            'recent_matches': [
+                {
+                    'date': match['date'],
+                    'team1_goals': match['home_goals'] if match['home_team'] == home_team_id else match['away_goals'],
+                    'team2_goals': match['away_goals'] if match['home_team'] == home_team_id else match['home_goals'],
+                    'venue': 'home' if match['home_team'] == home_team_id else 'away',
+                    'goal_difference': match['home_goals'] - match['away_goals'] 
+                        if match['home_team'] == home_team_id
+                        else match['away_goals'] - match['home_goals'],
+                    'dominance': 1 if (match['home_team'] == home_team_id and match['home_goals'] > match['away_goals']) or
+                                    (match['away_team'] == home_team_id and match['away_goals'] > match['home_goals'])
+                                else 0 if match['home_goals'] != match['away_goals']
+                                else 0.5
+                }
+                for match in h2h_matches[-5:]
+            ]
         },
-        'confidence': confidence,
-        'matches_analyzed': stats['total_matches']
+        'confidence': 'high' if total_matches >= 5 else 'medium' if total_matches >= 3 else 'low',
+        'matches_analyzed': total_matches
     }
+    
+    # Cache the h2h stats
+    cache.set('h2h_stats', cache_params, h2h_stats)
+    
+    return h2h_stats
 
 def calculate_team_strength_index(team_stats: Dict) -> Dict:
     """
@@ -1323,8 +1384,17 @@ def get_historical_matches(team_id: int, league: str, seasons: List[int] = None)
 
 def get_team_statistics(team_id: int, league: str) -> Dict:
     """
-    Fetch current season statistics for a team.
+    Fetch current season statistics for a team with caching.
     """
+    # Try to get from cache first
+    cache_params = {
+        'team_id': team_id,
+        'league': league
+    }
+    cached_data = cache.get('team_stats', cache_params, max_age_hours=24)
+    if cached_data:
+        return cached_data
+    
     current_year = datetime.now().year
     season = current_year if datetime.now().month > 6 else current_year - 1
     
@@ -1438,6 +1508,9 @@ def get_team_statistics(team_id: int, league: str) -> Dict:
                                 processed_stats['fixtures']['played'])) * 100
         }
     
+    # Cache the processed stats
+    cache.set('team_stats', cache_params, processed_stats)
+    
     return processed_stats
 
 def get_head_to_head(team1_id: int, team2_id: int, num_matches: int = 5) -> List[Dict]:
@@ -1529,8 +1602,17 @@ def calculate_league_averages(matches: List[Dict]) -> Dict[str, float]:
 
 def get_h2h_statistics(home_team_id: int, away_team_id: int) -> Dict:
     """
-    Get head-to-head statistics between two teams.
+    Get head-to-head statistics between two teams with caching.
     """
+    # Try to get from cache first
+    cache_params = {
+        'home_team_id': home_team_id,
+        'away_team_id': away_team_id
+    }
+    cached_data = cache.get('h2h_stats', cache_params, max_age_hours=24)
+    if cached_data:
+        return cached_data
+    
     # Get head-to-head matches
     h2h_matches = get_head_to_head(home_team_id, away_team_id)
     
@@ -1578,7 +1660,7 @@ def get_h2h_statistics(home_team_id: int, away_team_id: int) -> Dict:
     # Calculate h2h factor
     h2h_factor = (weighted_dominance * 0.4 + venue_advantage * 0.4 + consistency * 0.2) * 1.5
     
-    return {
+    h2h_stats = {
         'h2h_factor': h2h_factor,
         'stats': {
             'team1_wins': team1_wins,
@@ -1629,6 +1711,11 @@ def get_h2h_statistics(home_team_id: int, away_team_id: int) -> Dict:
         'confidence': 'high' if total_matches >= 5 else 'medium' if total_matches >= 3 else 'low',
         'matches_analyzed': total_matches
     } 
+    
+    # Cache the h2h stats
+    cache.set('h2h_stats', cache_params, h2h_stats)
+    
+    return h2h_stats
 
 def simple_predict_match(home_team_id: int, away_team_id: int, league_id: int) -> Dict:
     """
@@ -1864,3 +1951,47 @@ def predict_batch_matches(fixtures: List[Dict], max_workers: int = 3) -> List[Di
         results = list(executor.map(predict_single_match, fixtures))
     
     return results
+
+# Initialize the prediction cache
+_prediction_cache = {}
+_cache_ttl = 60  # Cache for 1 minute
+
+def get_cached_prediction(home_team_id, away_team_id, league_id):
+    """
+    Get a cached prediction for a match, or calculate a new one if not cached.
+    Uses a simple in-memory cache with TTL.
+    """
+    try:
+        # Ensure proper types for all IDs
+        home_id = int(home_team_id)
+        away_id = int(away_team_id)
+        league = int(league_id)
+        
+        if not all([home_id, away_id, league]):
+            print(f"Invalid team or league ID: {home_id}, {away_id}, {league}")
+            return create_fallback_prediction()
+        
+        # Create a unique cache key
+        cache_key = f"{home_id}_{away_id}_{league}"
+        
+        # Check if prediction is in cache and not expired
+        if cache_key in _prediction_cache:
+            cached_time, prediction = _prediction_cache[cache_key]
+            if time.time() - cached_time < _cache_ttl:
+                return prediction
+        
+        # Call prediction function with proper types
+        result = predict_match(home_id, away_id, league)
+        
+        # Validate result
+        if not result or not isinstance(result, dict):
+            print(f"Invalid prediction result type: {type(result)}")
+            return create_fallback_prediction()
+        
+        # Store in cache with timestamp
+        _prediction_cache[cache_key] = (time.time(), result)
+        
+        return result
+    except Exception as e:
+        print(f"Prediction error in cache function: {str(e)}")
+        return create_fallback_prediction()

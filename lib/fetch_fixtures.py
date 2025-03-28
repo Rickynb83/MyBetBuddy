@@ -33,7 +33,7 @@ LEAGUES = {
     'Primeira Liga': 94,
     
     # Denmark
-    '1. Division': 120,
+    'Superliga': 119,
     
     # Greece
     'Super League 1': 197,
@@ -83,7 +83,7 @@ def api_football_request(endpoint, params):
         print(traceback.format_exc())
         return None
 
-@st.cache_data(ttl=43200)
+@st.cache_data(ttl=3600)  # Cache for 1 hour
 def fetch_fixtures(league):
     try:
         today = datetime.now()
@@ -136,42 +136,137 @@ def fetch_fixtures(league):
         print(traceback.format_exc())
         return []
 
-@st.cache_data(ttl=43200)
+@st.cache_data(ttl=3600)  # Cache for 1 hour
 def fetch_standings():
     try:
         standings = {league: [] for league in LEAGUES.keys()}  # Create a dictionary for each league
         
+        # Special handling for leagues with known issues
+        problem_leagues = {
+            'Superliga': {'season': 2023, 'expected_teams': 12, 'multiple_groups': True},
+            'Super League 1': {'season': 2023, 'expected_teams': 14, 'multiple_groups': True},
+            'Primeira Liga': {'season': 2023, 'expected_teams': 18}
+        }
+        
         for league_name, league_id in LEAGUES.items():
             print(f"Fetching standings for {league_name}")
             
+            # First try current season (2024)
+            use_season = 2024
+            if league_name in problem_leagues:
+                # For problem leagues, try recommended season first
+                use_season = problem_leagues[league_name]['season']
+            
             data = api_football_request('standings', {
-                'season': 2024,
+                'season': use_season,
                 'league': league_id
             })
             
             if data and data.get('response'):
                 for league_data in data['response']:
                     if league_data['league'].get('standings'):
-                        league_standings = league_data['league']['standings'][0]
-                        for team in league_standings:
-                            standings[league_name].append({
-                                'team': team['team']['name'],
-                                'team_id': team['team']['id'],  # Add team ID
-                                'rank': team['rank'],
-                                'points': team['points'],
-                                'goalsDiff': team['goalsDiff'],
-                                'played': team['all']['played'],
-                                'won': team['all']['win'],
-                                'drawn': team['all']['draw'],
-                                'lost': team['all']['lose'],
-                                'for': team['all']['goals']['for'],
-                                'against': team['all']['goals']['against'],
-                                'form': team['form']
+                        # Check if we have multiple standings groups (championship/relegation format)
+                        standings_groups = league_data['league']['standings']
+                        
+                        # Handle leagues with multiple groups (championship and relegation groups)
+                        if isinstance(standings_groups, list) and len(standings_groups) > 1 and league_name in problem_leagues and problem_leagues[league_name].get('multiple_groups'):
+                            print(f"Found multiple standings groups for {league_name}: {len(standings_groups)} groups")
+                            
+                            # Combine all groups but keep track of seen teams to avoid duplicates
+                            league_standings = []
+                            seen_team_ids = set()
+                            
+                            for group in standings_groups:
+                                for team in group:
+                                    if team['team']['id'] not in seen_team_ids:
+                                        league_standings.append(team)
+                                        seen_team_ids.add(team['team']['id'])
+                                    else:
+                                        print(f"Skipping duplicate team: {team['team']['name']} (ID: {team['team']['id']})")
+                        else:
+                            # Use the first group (normal leagues)
+                            league_standings = standings_groups[0] if standings_groups else []
+                        
+                        # Check if we got meaningful data
+                        if (not league_standings or 
+                            (league_name in problem_leagues and 
+                             len(league_standings) < problem_leagues[league_name]['expected_teams'])):
+                            
+                            print(f"Warning: Received incomplete standings data for {league_name}. Only {len(league_standings) if league_standings else 0} teams.")
+                            
+                            # Try alternative season for problem leagues
+                            alt_season = 2023 if use_season == 2024 else 2024
+                            print(f"Trying season {alt_season} for {league_name}")
+                            
+                            alt_data = api_football_request('standings', {
+                                'season': alt_season,
+                                'league': league_id
                             })
-                        print(f"✅ Added {league_name} standings")
+                            
+                            if alt_data and alt_data.get('response'):
+                                for alt_league_data in alt_data['response']:
+                                    if alt_league_data['league'].get('standings'):
+                                        # Multiple groups for alternative season
+                                        alt_standings_groups = alt_league_data['league']['standings']
+                                        
+                                        if isinstance(alt_standings_groups, list) and len(alt_standings_groups) > 1 and league_name in problem_leagues and problem_leagues[league_name].get('multiple_groups'):
+                                            print(f"Found multiple standings groups for {league_name} in season {alt_season}: {len(alt_standings_groups)} groups")
+                                            
+                                            # Combine all groups but avoid duplicates
+                                            alt_standings = []
+                                            seen_team_ids = set()
+                                            
+                                            for group in alt_standings_groups:
+                                                for team in group:
+                                                    if team['team']['id'] not in seen_team_ids:
+                                                        alt_standings.append(team)
+                                                        seen_team_ids.add(team['team']['id'])
+                                                    else:
+                                                        print(f"Skipping duplicate team: {team['team']['name']} (ID: {team['team']['id']})")
+                                        else:
+                                            # Use the first group (normal leagues)
+                                            alt_standings = alt_standings_groups[0] if alt_standings_groups else []
+                                        
+                                        if alt_standings and len(alt_standings) > len(league_standings):
+                                            print(f"Using {alt_season} season data for {league_name} which has {len(alt_standings)} teams")
+                                            league_standings = alt_standings
+                        
+                        # Final processed standings with no duplicates
+                        standings_list = []
+                        seen_team_ids = set()
+                        
+                        for team in league_standings:
+                            if team['team']['id'] not in seen_team_ids:
+                                standings_list.append({
+                                    'team': team['team']['name'],
+                                    'team_id': team['team']['id'],  # Add team ID
+                                    'rank': int(team['rank']),  # Original rank (will be recalculated)
+                                    'points': team['points'],
+                                    'goalsDiff': team['goalsDiff'],
+                                    'played': team['all']['played'],
+                                    'won': team['all']['win'],
+                                    'drawn': team['all']['draw'],
+                                    'lost': team['all']['lose'],
+                                    'for': team['all']['goals']['for'],
+                                    'against': team['all']['goals']['against'],
+                                    'form': team['form']
+                                })
+                                seen_team_ids.add(team['team']['id'])
+                        
+                        # Sort by points (descending), then goal difference (descending), then goals for (descending)
+                        standings_list.sort(key=lambda x: (-x['points'] if x['points'] is not None else -999, 
+                                                          -x['goalsDiff'] if x['goalsDiff'] is not None else -999, 
+                                                          -x['for'] if x['for'] is not None else -999))
+                        
+                        # Recalculate ranks
+                        for i, team in enumerate(standings_list):
+                            team['rank'] = i + 1
+                            
+                        standings[league_name] = standings_list
+                        print(f"✅ Added {league_name} standings with {len(standings[league_name])} teams")
             else:
                 print(f"No data returned for {league_name}.")
-                standings[league_name] = pd.DataFrame(columns=['rank', 'team', 'played', 'won', 'drawn', 'lost', 'for', 'against', 'points', 'goalsDiff', 'form'])
+                standings[league_name] = []
             
             time.sleep(0.1)
             
@@ -181,7 +276,7 @@ def fetch_standings():
         print(f"Error fetching standings: {e}")
         return {}
 
-@st.cache_data(ttl=43200)
+@st.cache_data(ttl=3600)  # Cache for 1 hour
 def fetch_predictions(fixture_id):
     """Fetch predictions for a specific fixture from API-Football."""
     try:
@@ -274,7 +369,7 @@ def fetch_predictions(fixture_id):
 
 # NEW FUNCTIONS FOR ADDITIONAL DATA
 
-@st.cache_data(ttl=43200)
+@st.cache_data(ttl=3600)  # Cache for 1 hour
 def fetch_head_to_head(team1_id, team2_id, last=10):
     """Fetch head-to-head stats between two teams."""
     try:
@@ -307,7 +402,7 @@ def fetch_head_to_head(team1_id, team2_id, last=10):
         print(f"Error fetching head-to-head: {e}")
         return []
 
-@st.cache_data(ttl=43200)
+@st.cache_data(ttl=3600)  # Cache for 1 hour
 def fetch_team_statistics(team_id, league_id, season='2024'):
     """Fetch detailed statistics for a team in a specific league."""
     try:
@@ -371,7 +466,7 @@ def fetch_team_statistics(team_id, league_id, season='2024'):
         print(f"Error fetching team statistics: {e}")
         return {}
 
-@st.cache_data(ttl=43200)
+@st.cache_data(ttl=3600)  # Cache for 1 hour
 def fetch_players(team_id, season='2024'):
     """Fetch players for a specific team."""
     try:
@@ -405,7 +500,7 @@ def fetch_players(team_id, season='2024'):
         print(f"Error fetching players: {e}")
         return []
 
-@st.cache_data(ttl=43200)
+@st.cache_data(ttl=3600)  # Cache for 1 hour
 def fetch_lineups(fixture_id):
     """Fetch lineups for a specific fixture."""
     try:
@@ -430,7 +525,7 @@ def fetch_lineups(fixture_id):
         print(f"Error fetching lineups: {e}")
         return {}
 
-@st.cache_data(ttl=43200)
+@st.cache_data(ttl=3600)  # Cache for 1 hour
 def fetch_venue_info(venue_name):
     """Fetch information about a specific venue."""
     try:
@@ -459,7 +554,7 @@ def fetch_venue_info(venue_name):
         print(f"Error fetching venue info: {e}")
         return {}
 
-@st.cache_data(ttl=43200)
+@st.cache_data(ttl=3600)  # Cache for 1 hour
 def fetch_injuries(team_id, league_id, season='2024'):
     """Fetch injuries for a specific team."""
     try:
@@ -488,7 +583,7 @@ def fetch_injuries(team_id, league_id, season='2024'):
         print(f"Error fetching injuries: {e}")
         return []
 
-@st.cache_data(ttl=43200)
+@st.cache_data(ttl=3600)  # Cache for 1 hour
 def fetch_team_form(team_id, last=5):
     """Fetch recent form for a specific team."""
     try:
@@ -526,7 +621,7 @@ def fetch_team_form(team_id, last=5):
         print(f"Error fetching team form: {e}")
         return []
 
-@st.cache_data(ttl=21600)  # Cache for 6 hours
+@st.cache_data(ttl=3600)  # Cache for 1 hour
 def fetch_weather_for_fixture(fixture_id):
     """Fetch weather information for a fixture (if available)."""
     try:
@@ -556,7 +651,7 @@ def fetch_weather_for_fixture(fixture_id):
         print(f"Error fetching weather: {e}")
         return {}
 
-@st.cache_data(ttl=43200)
+@st.cache_data(ttl=3600)  # Cache for 1 hour
 def fetch_referee_info(fixture_id):
     """Fetch referee information for a fixture."""
     try:
@@ -584,7 +679,7 @@ def fetch_referee_info(fixture_id):
         print(f"Error fetching referee info: {e}")
         return {}
 
-@st.cache_data(ttl=43200)
+@st.cache_data(ttl=3600)  # Cache for 1 hour
 def fetch_available_leagues():
     """Fetch all available leagues from API-Football."""
     try:

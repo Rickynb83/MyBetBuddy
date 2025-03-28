@@ -32,7 +32,8 @@ from lib.fetch_fixtures import (
     fetch_fixtures, fetch_standings, LEAGUES,
     fetch_head_to_head, fetch_team_statistics, fetch_players,
     fetch_lineups, fetch_venue_info, fetch_injuries,
-    fetch_team_form, fetch_weather_for_fixture, fetch_referee_info
+    fetch_team_form, fetch_weather_for_fixture, fetch_referee_info,
+    api_football_request
 )
 import random
 from lib.predictions import predict_match, create_fallback_prediction
@@ -410,165 +411,45 @@ if not DEVELOPMENT_MODE:
             st.session_state.username = None
             st.rerun()
 
-# Apply custom CSS for consistent font sizes and adjust padding to fix header overlap
+# Add custom CSS for fixed header
 st.markdown("""
-<style>
-    /* Force all tables to fit within the container width */
-    .stDataFrame, .stTable, [data-testid="stDataFrameResizable"] {
-        width: auto !important;
-        max-width: 100% !important;
-        overflow-x: hidden !important;
-    }
-    
-    /* Force table to use fixed layout and fit within container */
-    .stDataFrame table, .stTable table {
-        width: auto !important;
-        table-layout: fixed !important;
-        font-size: 14px;
-    }
-    
-    /* Force all table cells to wrap content and limit width */
-    .stDataFrame table td, .stTable table td,
-    .stDataFrame table th, .stTable table th {
-        white-space: normal !important;
-        word-break: break-word !important;
-        overflow: hidden !important;
-        text-overflow: ellipsis !important;
-        padding: 0.15rem 0.2rem !important;
-        font-size: inherit !important;
-    }
-    
-    /* Remove top padding to prevent header overlap */
+    <style>
+    /* Basic styling for better readability */
     .block-container {
-        padding-top: 3rem;
+        padding-top: 1rem;
     }
     
-    /* Style for analysis sections */
-    .analysis-section {
-        background-color: #f0f2f6;
-        padding: 1rem;
-        border-radius: 0.5rem;
-        margin: 1rem 0;
+    /* Standings table styling */
+    .standings-scroll-container {
+        max-height: 600px;
+        overflow-y: auto;
+        margin-bottom: 1rem;
     }
     
-    /* Adjust font sizes for mobile */
-    @media screen and (max-width: 640px) {
-        .stDataFrame table, .stTable table {
-            font-size: 10px !important;
-        }
-        
-        .stDataFrame table td, .stTable table td,
-        .stDataFrame table th, .stTable table th {
-            padding: 0.1rem 0.15rem !important;
-        }
-        
-        h1 {
-            font-size: 1.5rem !important;
-        }
-        
-        h2 {
-            font-size: 1.3rem !important;
-        }
-        
-        h3 {
-            font-size: 1.1rem !important;
-        }
-        
-        .stButton button {
-            font-size: 0.8rem;
-            padding: 0.3rem 0.5rem;
-        }
-        
-        /* Reduce padding on mobile */
-        .block-container {
-            padding-left: 0.5rem;
-            padding-right: 0.5rem;
-        }
-    }
-    
-    /* Tablet adjustments */
-    @media screen and (min-width: 641px) and (max-width: 1024px) {
-        .stDataFrame table, .stTable table {
-            font-size: 12px !important;
-        }
-    }
-    
-    /* Ensure buttons and interactive elements are touch-friendly */
-    button, select, .stSelectbox, .stMultiselect {
-        min-height: 36px;
-    }
-    
-    /* Hide horizontal scrollbar */
-    .stDataFrame::-webkit-scrollbar-horizontal,
-    .stTable::-webkit-scrollbar-horizontal,
-    [data-testid="stDataFrameResizable"]::-webkit-scrollbar-horizontal {
-        display: none !important;
-    }
-    
-    /* Additional fixes for Streamlit's internal containers */
-    [data-testid="stDataFrameResizable"] {
-        overflow-x: hidden !important;
-        width: auto !important;
-    }
-    
-    /* Target the specific container that might be causing scrolling */
-    [data-testid="stHorizontalBlock"] {
-        overflow-x: hidden !important;
-        max-width: 100% !important;
-    }
-    
-    /* Target the table wrapper */
-    .stDataFrame > div, .stTable > div {
-        overflow-x: hidden !important;
-    }
-    
-    /* Disable all horizontal scrolling in the app */
-    div[data-testid="stAppViewContainer"] {
-        overflow-x: hidden !important;
-    }
-    
-    /* Disable column resizing */
-    .resize-handle {
-        display: none !important;
-    }
-    
-    /* Fix for tab navigation bar */
-    .stTabs [data-baseweb="tab-list"] {
-        flex-wrap: wrap !important;
-        overflow-x: hidden !important;
-    }
-    
-    /* API-Football widget style for standings table */
     .api-football-standings {
         width: 100%;
         border-collapse: collapse;
-        font-family: Arial, sans-serif;
-        font-size: 14px;
-        box-shadow: 0 2px 5px rgba(0,0,0,0.1);
-        border-radius: 4px;
-        overflow: hidden;
+        font-size: 0.9em;
+    }
+    
+    .api-football-standings th,
+    .api-football-standings td {
+        padding: 0.5rem;
+        text-align: left;
+        border-bottom: 1px solid #ddd;
     }
     
     .api-football-standings th {
-        background-color: #38003c !important;
-        color: white !important;
-        font-weight: bold !important;
-        text-align: center !important;
-        padding: 10px 5px !important;
-        font-size: 12px !important;
-        position: sticky !important;
-        top: 0 !important;
-        z-index: 10 !important;
-    }
-    
-    .api-football-standings td {
-        padding: 8px 5px;
-        text-align: center;
-        border-bottom: 1px solid #f0f0f0;
+        background-color: #38003c;
+        color: white;
+        font-weight: bold;
+        position: sticky;
+        top: 0;
+        z-index: 1;
     }
     
     .api-football-standings tr:nth-child(even) {
-        background-color: #f9f9f9;
+        background-color: #f8f8f8;
     }
     
     .api-football-standings tr:hover {
@@ -576,117 +457,44 @@ st.markdown("""
     }
     
     .team-cell {
-        display: flex;
-        align-items: center;
-        text-align: left;
-        padding-left: 5px;
+        font-weight: bold;
     }
     
+    /* Form badge styling */
     .form-badge {
         display: inline-block;
-        width: 16px;
-        height: 16px;
-        line-height: 16px;
+        width: 20px;
+        height: 20px;
+        line-height: 20px;
         text-align: center;
         border-radius: 50%;
-        color: white;
-        font-size: 10px;
-        margin-right: 2px;
+        margin: 0 2px;
+        font-size: 0.8em;
+        font-weight: bold;
     }
     
     .form-w {
         background-color: #4CAF50;
+        color: white;
     }
     
     .form-d {
         background-color: #FFC107;
+        color: black;
     }
     
     .form-l {
         background-color: #F44336;
+        color: white;
     }
-    
-    /* Ensure tables are aligned properly */
-    .stTabs [data-baseweb="tab-panel"] {
-        padding-top: 0 !important;
-    }
-    
-    .stTabs [data-baseweb="tab-panel"] h3 {
-        margin-top: 1rem !important;
-        margin-bottom: 0.5rem !important;
-        height: 40px !important;
-        line-height: 40px !important;
-    }
-    
-    /* Ensure both tables have the same top alignment */
-    .stTabs [data-baseweb="tab-panel"] .stSubheader {
-        margin-top: 0 !important;
-        margin-bottom: 0.5rem !important;
-        height: 40px !important;
-        line-height: 40px !important;
-    }
-    
-    /* Ensure columns have equal spacing */
-    .stTabs [data-baseweb="tab-panel"] .row-widget {
-        margin-top: 0 !important;
-    }
-    
-    /* Scrollable container styling with fixed header */
-    .standings-scroll-container {
-        max-height: 500px;
-        overflow-y: auto;
-        border-radius: 4px;
-        box-shadow: 0 2px 5px rgba(0,0,0,0.1);
-    }
-    
-    /* Custom scrollbar styling */
-    .standings-scroll-container::-webkit-scrollbar {
-        width: 8px;
-    }
-    
-    .standings-scroll-container::-webkit-scrollbar-track {
-        background: #f1f1f1;
-        border-radius: 4px;
-    }
-    
-    .standings-scroll-container::-webkit-scrollbar-thumb {
-        background: #38003c;
-        border-radius: 4px;
-    }
-    
-    .standings-scroll-container::-webkit-scrollbar-thumb:hover {
-        background: #5a1e5a;
-    }
-    
-    /* Style for data editor headers */
-    .stDataFrame [data-testid="stDataFrameResizable"] th {
-        background-color: #38003c !important;
-        color: white !important;
-        font-weight: bold !important;
-        text-align: center !important;
-        padding: 10px 5px !important;
-        font-size: 12px !important;
-    }
-    
-    /* Style for data editor header cells */
-    .stDataFrame [data-testid="stDataFrameResizable"] thead th:hover {
-        background-color: #38003c !important;
-        color: white !important;
-    }
-    
-    /* Style for data editor header cells when selected */
-    .stDataFrame [data-testid="stDataFrameResizable"] thead th:focus {
-        background-color: #38003c !important;
-        color: white !important;
-    }
-    
-    /* Style for data editor header cells when active */
-    .stDataFrame [data-testid="stDataFrameResizable"] thead th:active {
-        background-color: #38003c !important;
-        color: white !important;
-    }
-</style>
-""", unsafe_allow_html=True)
+    </style>
+    <div class="main-content">
+    """, unsafe_allow_html=True)
+
+# Main content starts here
+st.markdown("""
+    <div style="margin-top: 0;">
+    """, unsafe_allow_html=True)
 
 # Initialize session state variables
 if 'show_instructions' not in st.session_state:
@@ -749,7 +557,7 @@ LEAGUE_IDS = {
 }
 
 # Add caching decorator for predictions with unique key for each match
-@st.cache_data(ttl=3600)  # Cache for 1 hour
+@st.cache_data(ttl=2)  # Cache for 2 seconds
 def get_cached_prediction(home_team_id, away_team_id, league_id):
     try:
         # Ensure proper types for all IDs
@@ -760,7 +568,15 @@ def get_cached_prediction(home_team_id, away_team_id, league_id):
         if not all([home_id, away_id, league]):
             print(f"Invalid team or league ID: {home_id}, {away_id}, {league}")
             return create_fallback_prediction()
-            
+        
+        # Create a unique cache key
+        cache_key = f"{home_id}_{away_id}_{league}"
+        
+        # Check if prediction is already in cache
+        if hasattr(get_cached_prediction, 'cache'):
+            if cache_key in get_cached_prediction.cache:
+                return get_cached_prediction.cache[cache_key]
+        
         # Call prediction function with proper types
         result = predict_match(home_id, away_id, league)
         
@@ -768,11 +584,12 @@ def get_cached_prediction(home_team_id, away_team_id, league_id):
         if not result or not isinstance(result, dict):
             print(f"Invalid prediction result type: {type(result)}")
             return create_fallback_prediction()
-            
-        # Check for template/default results
-        if result.get('metadata', {}).get('error') == 'Fallback prediction used':
-            print(f"Fallback prediction was used for {home_id} vs {away_id}")
-            
+        
+        # Cache the result
+        if not hasattr(get_cached_prediction, 'cache'):
+            get_cached_prediction.cache = {}
+        get_cached_prediction.cache[cache_key] = result
+        
         return result
     except Exception as e:
         print(f"Prediction error in cache function: {str(e)}")
@@ -841,6 +658,10 @@ def handle_fixture_selection(key, selected):
                                     # Get standings for this league to add positions
                                     standings_data = fetch_standings().get(league_name, [])
                                     standings_df = pd.DataFrame(standings_data)
+                                    
+                                    # Convert 'rank' column to integer to avoid decimal points
+                                    if 'rank' in standings_df.columns:
+                                        standings_df['rank'] = standings_df['rank'].astype(int)
                                     
                                     # Get positions if available
                                     home_position = 'N/A'
@@ -921,6 +742,10 @@ if standings:
                 
                 # Create a DataFrame for the current league standings
                 standings_df = pd.DataFrame(standings[league])
+
+                # Convert 'rank' column to integer to avoid decimal points
+                if 'rank' in standings_df.columns:
+                    standings_df['rank'] = standings_df['rank'].astype(int)
 
                 # Debug: Print the raw standings data
                 print(f"\nDEBUG - Raw standings data for {league}:")
@@ -1031,16 +856,34 @@ if standings:
                     # Convert standings to DataFrame for mapping
                     current_standings_df = pd.DataFrame(standings[league])
 
+                    # Convert 'rank' column to integer to avoid decimal points
+                    if 'rank' in current_standings_df.columns:
+                        current_standings_df['rank'] = current_standings_df['rank'].astype(int)
+
                     # Add position columns for home and away teams
                     fixtures_df['Home Position'] = fixtures_df['homeTeam'].map(current_standings_df.set_index('team')['rank'])
                     fixtures_df['Away Position'] = fixtures_df['awayTeam'].map(current_standings_df.set_index('team')['rank'])
+                    
+                    # Ensure positions are integers
+                    fixtures_df['Home Position'] = fixtures_df['Home Position'].apply(
+                        lambda x: int(x) if pd.notnull(x) and not isinstance(x, str) else x
+                    )
+                    fixtures_df['Away Position'] = fixtures_df['Away Position'].apply(
+                        lambda x: int(x) if pd.notnull(x) and not isinstance(x, str) else x
+                    )
 
                     # Format the date with error handling
                     try:
                         # First try to parse the date column
                         fixtures_df['date'] = pd.to_datetime(fixtures_df['date'])
-                        # Then format it
-                        fixtures_df['Date'] = fixtures_df['date'].dt.strftime('%d/%m %I:%M %p')
+                        # Then format it - use try/except for each row to handle mixed timezones
+                        def format_date(date_val):
+                            try:
+                                return date_val.strftime('%d/%m %I:%M %p')
+                            except:
+                                return str(date_val)
+                        
+                        fixtures_df['Date'] = fixtures_df['date'].apply(format_date)
                     except Exception as e:
                         print(f"Error formatting date: {e}")
                         # Fallback to a simpler date format
@@ -1103,7 +946,8 @@ if standings:
                                 "Select": st.column_config.CheckboxColumn(
                                     "Select",
                                     help="Select a fixture to analyze",
-                                    default=False
+                                    default=False,
+                                    disabled=False
                                 ),
                                 "Home Team": st.column_config.TextColumn("Home", width=150),
                                 "Home Position": st.column_config.TextColumn("Pos", width=50),
@@ -1122,10 +966,33 @@ if standings:
                                 # Check if the selection state has changed
                                 if fixture_key in selected_keys and not is_selected:
                                     # Fixture was deselected
-                                    handle_fixture_selection(fixture_key, False)
+                                    st.session_state.selected_fixtures = [
+                                        f for f in st.session_state.selected_fixtures 
+                                        if not (f['Home Team'] == row['Home Team'] and 
+                                               f['Away Team'] == row['Away Team'] and 
+                                               f['Date'] == row['Date'])
+                                    ]
+                                    print(f"Removed fixture: {fixture_key}")
                                 elif fixture_key not in selected_keys and is_selected:
-                                    # Fixture was selected
-                                    handle_fixture_selection(fixture_key, True)
+                                    # Get the original fixture data from fixtures_df
+                                    original_fixture = fixtures_df.iloc[idx]
+                                    
+                                    # Create fixture dict with all necessary data
+                                    fixture_dict = {
+                                        'Date': row['Date'],
+                                        'Home Position': row['Home Position'],
+                                        'Home Team': row['Home Team'],
+                                        'Away Team': row['Away Team'],
+                                        'Away Position': row['Away Position'],
+                                        'fixture_id': original_fixture['fixture_id'],
+                                        'home_team_id': original_fixture['home_team_id'],
+                                        'away_team_id': original_fixture['away_team_id'],
+                                        'venue': original_fixture['venue'],
+                                        'league': league
+                                    }
+                                    st.session_state.selected_fixtures.append(fixture_dict)
+                                    print(f"Added fixture: {fixture_key}")
+                                    print(f"Fixture details: {fixture_dict}")
                         
                             # Only rerun if there were actual changes
                             if 'last_editor_state' not in st.session_state:
@@ -1245,7 +1112,7 @@ if standings:
                         })
                 
                 # Process predictions in batches
-                batch_size = 3  # Reduce batch size
+                batch_size = 5  # Increased batch size
                 total_fixtures = len(analysis_df)
                 progress_bar = st.progress(0)
 
@@ -1255,6 +1122,10 @@ if standings:
                 away_win_pcts = []
                 predictions_source = []
                 prediction_details = []
+
+                # Pre-fetch all team stats and form data
+                team_stats_cache = {}
+                team_form_cache = {}
 
                 for batch_start in range(0, total_fixtures, batch_size):
                     batch_end = min(batch_start + batch_size, total_fixtures)
@@ -1271,14 +1142,11 @@ if standings:
                         if isinstance(row['league'], str) and row['league'] in LEAGUE_IDS:
                             league_id = LEAGUE_IDS[row['league']]
                         else:
-                            # Try to get league ID directly if it's already a number
                             try:
                                 if str(row['league']).isdigit():
                                     league_id = int(row['league'])
-                                # If league is not recognized, use a fallback ID (Premier League)
                                 else:
                                     print(f"Invalid league: {row['league']} for {fixture_key}")
-                                    print(f"Using fallback league ID for {fixture_key}")
                                     league_id = 39  # Use Premier League as fallback
                             except:
                                 st.warning(f"League '{row['league']}' not recognized for {fixture_key}. Using fallback predictions.")
@@ -1286,7 +1154,6 @@ if standings:
                         
                         if not league_id:
                             st.error(f"Invalid league: {row['league']} for {fixture_key}")
-                            print(f"Using fallback league ID for {fixture_key}")
                             league_id = 39  # Use Premier League as fallback
                         
                         # Get cached prediction with unique key for each match
@@ -1313,8 +1180,8 @@ if standings:
                         else:
                             raise ValueError("Invalid prediction result")
                     
-                    # Add a small delay between predictions
-                    time.sleep(0.2)
+                    # Reduced delay between batches
+                    time.sleep(0.1)
                 
                 # Update the progress bar
                 progress = (batch_end / total_fixtures)
@@ -1699,3 +1566,6 @@ if standings:
 
 else:
     st.warning("No standings data available. Please check back later.") 
+
+# Close the main content div at the end
+st.markdown("</div>", unsafe_allow_html=True) 
