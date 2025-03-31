@@ -533,7 +533,7 @@ if not DEVELOPMENT_MODE:
         
     # TEMPORARY: Bypass authentication for testing
     # Remove this line for production
-    st.session_state.authenticated = True
+    # st.session_state.authenticated = True
         
     if 'username' not in st.session_state:
         st.session_state.username = None
@@ -1256,6 +1256,7 @@ if standings:
                             border-collapse: collapse;
                             background-color: #000;
                             color: #fff;
+                            table-layout: fixed;
                         }}
                         .fixtures-table thead {{
                             position: sticky;
@@ -1274,15 +1275,61 @@ if standings:
                             z-index: 10;
                             font-weight: 500;
                             font-size: 13px;
+                            white-space: nowrap;
+                            overflow: hidden;
+                            text-overflow: ellipsis;
                         }}
                         .fixtures-table td {{
                             padding: 12px !important;
                             border-bottom: 1px solid #333 !important;
                             color: #fff !important;
                             font-size: 16px !important; /* +1 font size */
+                            word-wrap: break-word;
+                            overflow: hidden;
+                            text-overflow: ellipsis;
                         }}
-                        .fixtures-table tr:hover {{
-                            background-color: #111;
+                        
+                        /* Mobile-specific styles */
+                        @media (max-width: 768px) {{
+                            .fixtures-container {{
+                                max-height: 500px;
+                                overflow-x: visible;
+                                width: 100%;
+                            }}
+                            
+                            .fixtures-table {{
+                                width: 100%;
+                                min-width: unset; /* Remove min-width to prevent horizontal scrolling */
+                                table-layout: fixed; /* Force table to respect container width */
+                            }}
+                            
+                            .fixtures-table th, .fixtures-table td {{
+                                padding: 6px 4px !important;
+                                font-size: 12px !important;
+                                white-space: normal !important; /* Allow text to wrap */
+                                overflow: hidden !important;
+                                text-overflow: ellipsis !important;
+                            }}
+                            
+                            .fixtures-table th:nth-child(1), .fixtures-table td:nth-child(1) {{ width: 25%; }}
+                            .fixtures-table th:nth-child(2), .fixtures-table td:nth-child(2) {{ width: 10%; }}
+                            .fixtures-table th:nth-child(3), .fixtures-table td:nth-child(3) {{ width: 25%; }}
+                            .fixtures-table th:nth-child(4), .fixtures-table td:nth-child(4) {{ width: 10%; }}
+                            .fixtures-table th:nth-child(5), .fixtures-table td:nth-child(5) {{ width: 15%; }}
+                            .fixtures-table th:nth-child(6), .fixtures-table td:nth-child(6) {{ width: 15%; }}
+                            
+                            /* Make team names and logos more compact */
+                            .fixtures-table td div {{
+                                display: flex !important;
+                                flex-direction: column !important;
+                                align-items: flex-start !important;
+                            }}
+                            
+                            .fixtures-table img {{
+                                width: 16px !important;
+                                height: 16px !important;
+                                margin-right: 4px !important;
+                            }}
                         }}
                     </style>
                     <table class="fixtures-table">
@@ -1416,6 +1463,55 @@ if standings:
                     
                     # Use components.html instead of markdown to render the HTML
                     components.html(table_html + fixture_rows_html + "</tbody></table></div>", height=600, scrolling=True)
+
+# Let's add JavaScript to dynamically adjust height based on screen size
+                    # Use components.html instead of markdown to render the HTML
+                    html_content = table_html + fixture_rows_html + """
+                    </tbody></table></div>
+                    <script>
+                        // Adjust component height based on screen size
+                        function adjustComponentHeight() {
+                            const isMobile = window.innerWidth < 768;
+                            const componentElement = window.frameElement;
+                            if (componentElement) {
+                                componentElement.style.height = isMobile ? '400px' : '600px';
+                                
+                                // Make sure the table fits within the width
+                                const tableElement = document.querySelector('.fixtures-table');
+                                if (tableElement) {
+                                    tableElement.style.width = '100%';
+                                    
+                                    // Set columns to equal width on mobile
+                                    if (isMobile) {
+                                        const thElements = document.querySelectorAll('.fixtures-table th');
+                                        const tdElements = document.querySelectorAll('.fixtures-table td');
+                                        
+                                        // Configure column widths on mobile
+                                        const widths = ['25%', '10%', '25%', '10%', '15%', '15%'];
+                                        
+                                        // Apply to header cells
+                                        thElements.forEach((th, i) => {
+                                            if (i < widths.length) {
+                                                th.style.width = widths[i];
+                                            }
+                                        });
+                                        
+                                        // Apply to data cells
+                                        for (let i = 0; i < tdElements.length; i++) {
+                                            const colIndex = i % widths.length;
+                                            tdElements[i].style.width = widths[colIndex];
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        
+                        // Run on load and on resize
+                        window.addEventListener('load', adjustComponentHeight);
+                        window.addEventListener('resize', adjustComponentHeight);
+                    </script>
+                    """
+                    components.html(html_content, height=600, scrolling=True)
 
 # Display statistics in sidebar based on selection
 if st.session_state.stats_type and st.session_state.current_fixture:
