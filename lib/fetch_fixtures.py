@@ -33,7 +33,7 @@ LEAGUES = {
     'Primeira Liga': 94,
     
     # Denmark
-    'Superliga': 119,
+    'Super Liga': 271,  # Updated to correct ID for Danish Super Liga
     
     # Greece
     'Super League 1': 197,
@@ -42,10 +42,13 @@ LEAGUES = {
     'Serie A': 135,
     
     # Scotland
-    'Premiership': 179,
+    'Scottish Premiership': 179,  # Renamed from Premiership
     
     # Turkey
-    'Süper Lig': 203
+    'Süper Lig': 203,  # Turkish Süper Lig
+    
+    # Switzerland
+    'Super League': 183  # Swiss Super League
 }
 
 API_KEY = os.getenv('API_FOOTBALL_KEY', 'your_api_key_here')
@@ -83,7 +86,7 @@ def api_football_request(endpoint, params):
         print(traceback.format_exc())
         return None
 
-@st.cache_data(ttl=3600)  # Cache for 1 hour
+@st.cache_data(ttl=1800)  # Cache for 30 minutes instead of 1 hour
 def fetch_fixtures(league):
     try:
         today = datetime.now()

@@ -415,10 +415,14 @@ def register_user(username, email, password):
             st.error("Email already registered. Please use a different email or try logging in.")
             return False
             
-        # Check if email is whitelisted
+        # Check if email is whitelisted (case-insensitive)
         whitelist = load_whitelist()
-        if email not in whitelist:
+        email_lower = email.lower()  # Convert input email to lowercase
+        whitelist_lower = [we.lower() for we in whitelist]  # Convert all whitelist emails to lowercase
+        
+        if email_lower not in whitelist_lower:
             st.error(f"Email not in whitelist. Please contact the administrator.")
+            print(f"Email {email} not in whitelist. Available emails: {whitelist}")  # Debug print
             return False
             
         # Hash the password using bcrypt
@@ -432,7 +436,12 @@ def register_user(username, email, password):
         }).execute()
         
         if response.data:
-            st.success("Registration successful! Please login.")
+            # Auto-login the user after successful registration
+            st.session_state.authenticated = True
+            st.session_state.username = username
+            st.success("Registration successful! You are now logged in.")
+            # Force page refresh to show the app
+            st.rerun()
             return True
         else:
             st.error("Registration failed. Please try again.")
@@ -475,21 +484,39 @@ if 'component_value' in st.session_state and st.session_state.component_value is
     try:
         value = st.session_state.component_value
         print(f"Debug: Received component value: {value}")  # Debug print
-        if isinstance(value, dict) and 'stat_type' in value:
-            print(f"Debug: Processing stat type: {value['stat_type']}")  # Debug print
-            st.session_state.stats_type = value['stat_type']
-            st.session_state.current_fixture = {
-                'home_id': value['home_id'],
-                'away_id': value['away_id'],
-                'home_team': value['home_team'],
-                'away_team': value['away_team']
-            }
-            print(f"Debug: Updated session state - stats_type: {st.session_state.stats_type}, current_fixture: {st.session_state.current_fixture}")  # Debug print
-            # Clear component value after processing
-            st.session_state.component_value = None
-            st.rerun()  # Rerun to process the new state
+        
+        if isinstance(value, dict):
+            print(f"Debug: Processing component value with keys: {list(value.keys())}")
+            
+            if 'stat_type' in value:
+                stat_type = value['stat_type']
+                print(f"Debug: Processing stat type: {stat_type}")  # Debug print
+                
+                # Store all information in session state
+                st.session_state.stats_type = stat_type
+                st.session_state.current_fixture = {
+                    'home_id': value['home_id'],
+                    'away_id': value['away_id'],
+                    'home_team': value['home_team'],
+                    'away_team': value['away_team']
+                }
+                
+                # Open the sidebar to show the content
+                st.session_state.sidebar_state = 'expanded'
+                
+                print(f"Debug: Updated session state - stats_type: {st.session_state.stats_type}, current_fixture: {st.session_state.current_fixture}")  # Debug print
+                
+                # Clear component value after processing
+                st.session_state.component_value = None
+                st.rerun()  # Rerun to process the new state and show sidebar
+            else:
+                print(f"Debug: No stat_type in component value")
+        else:
+            print(f"Debug: Component value is not a dict: {type(value)}")
     except Exception as e:
         print(f"Error processing component value: {e}")
+        import traceback
+        traceback.print_exc()
         st.session_state.component_value = None
 else:
     print("Debug: No component_value in session state or value is None")  # Debug print
@@ -501,16 +528,33 @@ except:
     standings = {}  # Use empty dict if fetch fails
 
 # Toggle for development mode (set to True to disable authentication during development)
-DEVELOPMENT_MODE = False  # Authentication enabled for testing
+DEVELOPMENT_MODE = False  # Authentication enabled for production
+# DEVELOPMENT_MODE = False  # Authentication enabled for production
 
 # Simple authentication functions
 def load_whitelist():
     """Load the whitelist of authorized email addresses from CSV"""
     try:
+        # Print current working directory for debugging
+        import os
+        print(f"Current working directory: {os.getcwd()}")
+        print(f"Attempting to load whitelist from: Whitelist.csv")
+        
+        if not os.path.exists('Whitelist.csv'):
+            print(f"❌ Whitelist.csv file not found!")
+            # List files in current directory
+            print(f"Files in current directory: {os.listdir('.')}")
+            return []
+            
         whitelist_df = pd.read_csv('Whitelist.csv')
-        return whitelist_df['email'].tolist()
+        emails = whitelist_df['email'].tolist()
+        print(f"✅ Successfully loaded {len(emails)} emails from whitelist: {emails}")
+        return emails
     except Exception as e:
         st.error(f"Error loading whitelist: {e}")
+        print(f"❌ Error loading whitelist: {e}")
+        import traceback
+        print(traceback.format_exc())
         return []
 
 def load_users():
@@ -589,9 +633,8 @@ if not DEVELOPMENT_MODE:
                     st.error("Passwords do not match")
                 else:
                     # Register user in Supabase
-                    if register_user(reg_username, reg_email, reg_password):
-                        st.success("Registration successful! Please login.")
-                        st.rerun()  # Rerun to show login form
+                    register_user(reg_username, reg_email, reg_password)
+                    # Note: No need for additional success message here as register_user handles login
         
         with tab3:
             st.subheader("Reset Password")
@@ -611,8 +654,8 @@ if not DEVELOPMENT_MODE:
     if st.session_state.authenticated:
         st.sidebar.success(f"Welcome {st.session_state.username}")
         
-        # Add mobile view toggle
-        st.sidebar.markdown("### Display Settings")
+        # Remove mobile view toggle section
+        # st.sidebar.markdown("### Display Settings")
 
         # Add responsive layout for mobile detection
         st.markdown("""
@@ -638,17 +681,17 @@ if not DEVELOPMENT_MODE:
         </script>
         """, unsafe_allow_html=True)
 
-        # Detect mobile view
-        mobile_view = st.checkbox("Mobile-friendly view", value=st.session_state.get('mobile_view', False), help="Optimize the layout for mobile devices")
-        if mobile_view != st.session_state.get('mobile_view', False):
-            st.session_state.mobile_view = mobile_view
-            st.rerun()
+        # Remove mobile view and compact tables toggles
+        # mobile_view = st.checkbox("Mobile-friendly view", value=st.session_state.get('mobile_view', False), help="Optimize the layout for mobile devices")
+        # if mobile_view != st.session_state.get('mobile_view', False):
+        #    st.session_state.mobile_view = mobile_view
+        #    st.rerun()
 
-        # Add compact tables toggle
-        compact_tables = st.checkbox("Compact tables (better for small screens)", value=st.session_state.get('compact_tables', False))
-        if compact_tables != st.session_state.get('compact_tables', False):
-            st.session_state.compact_tables = compact_tables
-            st.rerun()
+        # Remove compact tables toggle
+        # compact_tables = st.checkbox("Compact tables (better for small screens)", value=st.session_state.get('compact_tables', False))
+        # if compact_tables != st.session_state.get('compact_tables', False):
+        #    st.session_state.compact_tables = compact_tables
+        #    st.rerun()
         
         # Add admin section for password reset (only for admin users)
         if st.session_state.username == "admin" or st.session_state.username == "rickynb83":
@@ -672,6 +715,14 @@ if not DEVELOPMENT_MODE:
                     users[selected_user]['password'] = hash_password(new_password)
                     save_users(users)
                     st.sidebar.success(f"Password reset for {selected_user}")
+            
+            # Add option to clear cache
+            st.sidebar.markdown("#### Cache Management")
+            if st.sidebar.button("Clear App Cache"):
+                # This will clear all cached data
+                st.cache_data.clear()
+                st.sidebar.success("Cache cleared successfully!")
+                st.rerun()  # Rerun to reload with fresh data
         
         if st.sidebar.button("Logout"):
             st.session_state.authenticated = False
@@ -738,7 +789,7 @@ st.markdown("""
     /* League tabs styling - same color as team names, +2 font sizes */
     .st-emotion-cache-1oe5cao, .st-emotion-cache-13ejsyy, [data-testid="stHorizontalBlock"] .st-emotion-cache-ocqkz7 {
         color: #fff !important; /* Pure white */
-        font-size: 19px !important; /* +2 font sizes */
+        font-size: 18px !important; /* +1 font size (reduced from 19px) */
         font-weight: 700 !important; /* Extra bold */
     }
     
@@ -749,7 +800,7 @@ st.markdown("""
     div[role="tab"] p,
     div[role="tablist"] p {
         color: #fff !important; /* Pure white */
-        font-size: 19px !important; /* +2 font sizes */
+        font-size: 18px !important; /* +1 font size (reduced from 19px) */
         font-weight: 700 !important; /* Extra bold */
     }
     
@@ -761,8 +812,13 @@ st.markdown("""
     /* Active tab styling */
     .st-emotion-cache-pkbazv {
         color: #fff !important; /* Same color as team names */
-        font-size: 19px !important; /* +2 font sizes */
+        font-size: 18px !important; /* +1 font size (reduced from 19px) */
         font-weight: 700 !important; /* Extra bold */
+    }
+    
+    /* Subheader styling for league name + Fixtures */
+    .main .block-container h2 {
+        font-size: 120% !important; /* Reduced from 130% */
     }
     
     /* DataEditor and tables */
@@ -798,13 +854,15 @@ st.markdown("""
     
     /* Create a scrollable container for fixtures */
     .fixtures-container {
-        max-height: 600px !important;
+        max-height: calc(100vh - 400px) !important;
         overflow-y: auto !important;
         position: relative !important;
         border: 1px solid #333 !important;
         border-radius: 4px !important;
         margin-bottom: 20px !important;
         background-color: #000 !important;
+        scrollbar-width: thin !important;
+        scrollbar-color: #444 #222 !important;
     }
 
     /* Table styling */
@@ -821,19 +879,19 @@ st.markdown("""
     .fixtures-table thead {
         position: sticky !important;
         top: 0 !important;
-        z-index: 10 !important;
+        z-index: 100 !important;
         background-color: #000 !important;
     }
 
     .fixtures-table th {
+        position: sticky !important;
+        top: 0 !important;
+        z-index: 100 !important;
         background-color: #000 !important;
         color: #fff !important; /* Same color as team names */
         padding: 8px !important;
         text-align: left !important;
         border-bottom: 1px solid #333 !important;
-        position: sticky !important;
-        top: 0 !important;
-        z-index: 10 !important;
         font-weight: 700 !important;
         font-size: 16px !important; /* +1 font size */
     }
@@ -843,21 +901,86 @@ st.markdown("""
         border-bottom: 1px solid #333 !important;
         color: #fff !important;
         font-size: 16px !important; /* +1 font size */
+        word-wrap: break-word;
+        overflow: hidden;
+        text-overflow: ellipsis;
     }
-
+    
     /* Make scrollbars visible */
-    .fixtures-container::-webkit-scrollbar {
+    .fixtures-container::-webkit-scrollbar, 
+    div::-webkit-scrollbar {
         width: 8px !important;
+        height: 8px !important;
     }
-    .fixtures-container::-webkit-scrollbar-track {
+    .fixtures-container::-webkit-scrollbar-track, 
+    div::-webkit-scrollbar-track {
         background: #222 !important;
     }
-    .fixtures-container::-webkit-scrollbar-thumb {
+    .fixtures-container::-webkit-scrollbar-thumb, 
+    div::-webkit-scrollbar-thumb {
         background: #444 !important;
         border-radius: 4px !important;
     }
-    .fixtures-container::-webkit-scrollbar-thumb:hover {
+    .fixtures-container::-webkit-scrollbar-thumb:hover, 
+    div::-webkit-scrollbar-thumb:hover {
         background: #555 !important;
+    }
+    
+    /* Simple horizontal scrolling for tabs */
+    [data-testid="stHorizontalBlock"] {
+        overflow-x: auto !important;
+        white-space: nowrap !important;
+        padding: 0 10px !important;
+        margin: 0 -10px !important;
+        scrollbar-width: thin !important;
+        scrollbar-color: #444 #222 !important;
+    }
+    
+    [data-testid="stHorizontalBlock"]::-webkit-scrollbar {
+        height: 8px !important;
+    }
+    
+    [data-testid="stHorizontalBlock"]::-webkit-scrollbar-track {
+        background: #222 !important;
+    }
+    
+    [data-testid="stHorizontalBlock"]::-webkit-scrollbar-thumb {
+        background: #444 !important;
+        border-radius: 4px !important;
+    }
+    
+    [data-testid="stHorizontalBlock"]::-webkit-scrollbar-thumb:hover {
+        background: #555 !important;
+    }
+
+    /* Data select dropdown styling */
+    .data-select {
+        background-color: #222;
+        color: white;
+        padding: 6px 12px;
+        font-size: 14px;
+        border: 1px solid #444;
+        border-radius: 4px;
+        cursor: pointer;
+        width: 100%;
+        font-weight: bold;
+        box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+    }
+    
+    .data-select:hover {
+        background-color: #333;
+    }
+    
+    .data-select:focus {
+        outline: none;
+        border-color: #444;
+        box-shadow: 0 0 0 2px rgba(68, 68, 68, 0.5);
+    }
+    
+    .data-select option {
+        background-color: #333;
+        color: white;
+        padding: 10px;
     }
 
     /* Mobile responsive styles */
@@ -890,20 +1013,54 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# Main content starts here
+# Add custom CSS for fixed header
 st.markdown("""
-    <div class="header">
-        <h1>⚽ MyBetBuddy - Football Match Predictions</h1>
-    </div>
+    <style>
+    /* Horizontal scroll for tabs */
+    [data-testid="stHorizontalBlock"] {
+        overflow-x: auto !important;
+        white-space: nowrap !important;
+        padding: 0 10px !important;
+        margin: 0 -10px !important;
+        scrollbar-width: thin !important;
+        scrollbar-color: #444 #222 !important;
+    }
+    
+    [data-testid="stHorizontalBlock"]::-webkit-scrollbar {
+        height: 8px !important;
+    }
+    
+    [data-testid="stHorizontalBlock"]::-webkit-scrollbar-track {
+        background: #222 !important;
+    }
+    
+    [data-testid="stHorizontalBlock"]::-webkit-scrollbar-thumb {
+        background: #444 !important;
+        border-radius: 4px !important;
+    }
+    
+    [data-testid="stHorizontalBlock"]::-webkit-scrollbar-thumb:hover {
+        background: #555 !important;
+    }
+    </style>
     """, unsafe_allow_html=True)
+
+# Main content starts here
+# Use columns to place title and instructions button in the same row
+col1, col2 = st.columns([6, 1])
+with col1:
+    st.markdown("""
+        <div class="header">
+            <h1>⚽ MyBetBuddy - Football Match Predictions</h1>
+        </div>
+        """, unsafe_allow_html=True)
+with col2:
+    if st.button("📖", key="instructions_button", help="View Instructions"):
+        st.session_state.show_instructions = not st.session_state.show_instructions
 
 # Initialize session state variables
 if 'show_instructions' not in st.session_state:
     st.session_state.show_instructions = False
-
-# Add instructions button below the title
-if st.button("📖 Instructions", key="instructions_button"):
-    st.session_state.show_instructions = not st.session_state.show_instructions
 
 # Display instructions if the button has been clicked
 if st.session_state.show_instructions:
@@ -912,7 +1069,7 @@ if st.session_state.show_instructions:
     1. Toggle between leagues to view upcoming fixtures
     """)
 
-# Close the main-header div
+# Close the main-header div (removing this could cause HTML issues)
 st.markdown("</div>", unsafe_allow_html=True)
 
 # Process form data request if present in URL parameters
@@ -1067,7 +1224,7 @@ if 'show_analysis' not in st.session_state:
 LEAGUE_IDS = {
     'Premier League': 39,
     'La Liga': 140,
-    'Bundesliga': 78,  # Updated to correct ID
+    'Bundesliga': 78,
     'Serie A': 135,
     'Ligue 1': 61,
     'Eredivisie': 88,
@@ -1076,10 +1233,10 @@ LEAGUE_IDS = {
     'Championship': 40,
     'League One': 41,
     'League Two': 42,
-    'Super League': 183,
-    'Premiership': 179,  # Scottish Premiership
-    'Super League 1': 197,  # Add correct ID if needed
-    'Süper Lig': 145  # Add correct ID if needed
+    'Super Liga': 271,  # Updated to correct ID for Danish Super Liga
+    'Scottish Premiership': 179,  # Renamed from Premiership
+    'Super League': 183,  # Swiss Super League
+    'Süper Lig': 203  # Turkish Süper Lig
 }
 
 # Add this function to handle fixture selection
@@ -1242,7 +1399,7 @@ if standings:
                     table_html = """
                     <div class="fixtures-container">
                     <style>
-                        .fixtures-container {{
+                        .fixtures-container {
                             max-height: 600px;
                             overflow-y: auto;
                             position: relative;
@@ -1250,21 +1407,42 @@ if standings:
                             border-radius: 4px;
                             margin-bottom: 20px;
                             background-color: #000;
-                        }}
-                        .fixtures-table {{
+                            scrollbar-width: thin;
+                            scrollbar-color: #444 #222;
+                        }
+                        
+                        .fixtures-container::-webkit-scrollbar {
+                            width: 8px;
+                            height: 8px;
+                        }
+                        
+                        .fixtures-container::-webkit-scrollbar-track {
+                            background: #222;
+                        }
+                        
+                        .fixtures-container::-webkit-scrollbar-thumb {
+                            background: #444;
+                            border-radius: 4px;
+                        }
+                        
+                        .fixtures-container::-webkit-scrollbar-thumb:hover {
+                            background: #555;
+                        }
+                        
+                        .fixtures-table {
                             width: 100%;
                             border-collapse: collapse;
                             background-color: #000;
                             color: #fff;
                             table-layout: fixed;
-                        }}
-                        .fixtures-table thead {{
+                        }
+                        .fixtures-table thead {
                             position: sticky;
                             top: 0;
                             z-index: 10;
                             background-color: #000;
-                        }}
-                        .fixtures-table th {{
+                        }
+                        .fixtures-table th {
                             background-color: #000;
                             color: #ccc;
                             padding: 8px 12px;
@@ -1278,8 +1456,8 @@ if standings:
                             white-space: nowrap;
                             overflow: hidden;
                             text-overflow: ellipsis;
-                        }}
-                        .fixtures-table td {{
+                        }
+                        .fixtures-table td {
                             padding: 12px !important;
                             border-bottom: 1px solid #333 !important;
                             color: #fff !important;
@@ -1287,50 +1465,145 @@ if standings:
                             word-wrap: break-word;
                             overflow: hidden;
                             text-overflow: ellipsis;
-                        }}
+                        }
+                        
+                        /* Data select dropdown styling */
+                        .data-select {
+                            background-color: #222;
+                            color: white;
+                            padding: 6px 12px;
+                            font-size: 14px;
+                            border: 1px solid #444;
+                            border-radius: 4px;
+                            cursor: pointer;
+                            width: 100%;
+                            font-weight: bold;
+                            box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+                        }
+                        
+                        .data-select:hover {
+                            background-color: #333;
+                        }
+                        
+                        .data-select:focus {
+                            outline: none;
+                            border-color: #444;
+                            box-shadow: 0 0 0 2px rgba(68, 68, 68, 0.5);
+                        }
+                        
+                        .data-select option {
+                            background-color: #333;
+                            color: white;
+                            padding: 10px;
+                        }
+                        
+                        /* Dropdown styles for Data button */
+                        .dropbtn {
+                            background-color: #1e88e5;
+                            color: white;
+                            padding: 6px 12px;
+                            font-size: 14px;
+                            border: none;
+                            border-radius: 4px;
+                            cursor: pointer;
+                            width: 100%;
+                            transition: background-color 0.3s;
+                            font-weight: bold;
+                            box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+                        }
+                        
+                        .dropbtn:hover {
+                            background-color: #0d47a1;
+                        }
+                        
+                        .data-menu {
+                            position: relative;
+                            display: inline-block;
+                            width: 100%;
+                        }
+                        
+                        .data-menu-content {
+                            display: none;
+                            position: absolute;
+                            right: 0;
+                            top: 100%;
+                            background-color: #333;
+                            min-width: 160px;
+                            box-shadow: 0px 8px 16px 0px rgba(0,0,0,0.5);
+                            z-index: 9999;
+                            border-radius: 4px;
+                            border: 1px solid #444;
+                            max-height: 300px;
+                            overflow-y: auto;
+                        }
+                        
+                        .data-menu-content.active {
+                            display: block;
+                        }
+                        
+                        .data-menu-content a {
+                            color: white;
+                            padding: 10px 16px;
+                            text-decoration: none;
+                            display: block;
+                            text-align: left;
+                            font-size: 14px;
+                            transition: background-color 0.2s;
+                            border-bottom: 1px solid #444;
+                        }
+                        
+                        .data-menu-content a:hover {
+                            background-color: #444;
+                        }
                         
                         /* Mobile-specific styles */
-                        @media (max-width: 768px) {{
-                            .fixtures-container {{
+                        @media (max-width: 768px) {
+                            .fixtures-container {
                                 max-height: 500px;
                                 overflow-x: visible;
                                 width: 100%;
-                            }}
+                            }
                             
-                            .fixtures-table {{
+                            .fixtures-table {
                                 width: 100%;
                                 min-width: unset; /* Remove min-width to prevent horizontal scrolling */
                                 table-layout: fixed; /* Force table to respect container width */
-                            }}
+                            }
                             
-                            .fixtures-table th, .fixtures-table td {{
+                            .fixtures-table th, .fixtures-table td {
                                 padding: 6px 4px !important;
                                 font-size: 12px !important;
                                 white-space: normal !important; /* Allow text to wrap */
                                 overflow: hidden !important;
                                 text-overflow: ellipsis !important;
-                            }}
+                            }
                             
-                            .fixtures-table th:nth-child(1), .fixtures-table td:nth-child(1) {{ width: 25%; }}
-                            .fixtures-table th:nth-child(2), .fixtures-table td:nth-child(2) {{ width: 10%; }}
-                            .fixtures-table th:nth-child(3), .fixtures-table td:nth-child(3) {{ width: 25%; }}
-                            .fixtures-table th:nth-child(4), .fixtures-table td:nth-child(4) {{ width: 10%; }}
-                            .fixtures-table th:nth-child(5), .fixtures-table td:nth-child(5) {{ width: 15%; }}
-                            .fixtures-table th:nth-child(6), .fixtures-table td:nth-child(6) {{ width: 15%; }}
+                            .fixtures-table th:nth-child(1), .fixtures-table td:nth-child(1) { width: 25%; }
+                            .fixtures-table th:nth-child(2), .fixtures-table td:nth-child(2) { width: 10%; }
+                            .fixtures-table th:nth-child(3), .fixtures-table td:nth-child(3) { width: 25%; }
+                            .fixtures-table th:nth-child(4), .fixtures-table td:nth-child(4) { width: 10%; }
+                            .fixtures-table th:nth-child(5), .fixtures-table td:nth-child(5) { width: 15%; }
+                            .fixtures-table th:nth-child(6), .fixtures-table td:nth-child(6) { width: 15%; }
                             
                             /* Make team names and logos more compact */
-                            .fixtures-table td div {{
+                            .fixtures-table td div {
                                 display: flex !important;
                                 flex-direction: column !important;
                                 align-items: flex-start !important;
-                            }}
+                            }
                             
-                            .fixtures-table img {{
+                            .fixtures-table img {
                                 width: 16px !important;
                                 height: 16px !important;
                                 margin-right: 4px !important;
-                            }}
-                        }}
+                            }
+                            
+                            /* Adjust select size for mobile */
+                            .data-select {
+                                padding: 4px 8px;
+                                font-size: 12px;
+                            }
+                        }
                     </style>
                     <table class="fixtures-table">
                     <thead>
@@ -1344,7 +1617,7 @@ if standings:
                         </tr>
                     </thead>
                     <tbody>
-                    """.format(league)  # Add the league name as a format parameter
+                    """
                     
                     # Add debug logging
                     print("Generating fixtures table for league:", league)
@@ -1420,7 +1693,23 @@ if standings:
                                   A: <span style="font-weight: 500; color: #fff;">{9}%</span>
                                 </div>
                             </td>
-                            <td style="text-align: center; font-weight: 500; color: #fff;">{10}</td>
+                            <td style="text-align: center;">
+                                <div style="font-weight: 500; color: #fff; margin-bottom: 8px;">{10}</div>
+                                <!-- Stats dropdown temporarily disabled until fixed
+                                <select class="data-select" onchange="if(this.value) handleStatClick(this.value, {0}, {3}, '{1}', '{4}')">
+                                    <option value="">Data</option>
+                                    <option value="cards">Cards</option>
+                                    <option value="goals">Goals</option>
+                                    <option value="form">Form</option>
+                                    <option value="h2h">H2H</option>
+                                    <option value="players">Players</option>
+                                    <option value="stats">Statistics</option>
+                                    <option value="lineups">Lineups</option>
+                                    <option value="venue">Venue</option>
+                                    <option value="injuries">Injuries</option>
+                                </select>
+                                -->
+                            </td>
                         </tr>
                         """.format(
                             row['home_team_id'], row['Home Team'], row['Home Position'],
@@ -1431,6 +1720,65 @@ if standings:
                     # Add JavaScript functions for handling clicks with debug
                     table_html += """
                     <script>
+                        // Function to show dropdown when data button is clicked
+                        function toggleDataMenu(event, buttonId) {
+                            event.preventDefault();
+                            event.stopPropagation();
+                            console.log('Debug: toggleDataMenu called for', buttonId);
+                            
+                            const content = document.getElementById(buttonId + '-content');
+                            if (!content) {
+                                console.error('Could not find content element:', buttonId + '-content');
+                                return;
+                            }
+                            
+                            console.log('Debug: Found content element', content);
+                            
+                            // Toggle active class and display
+                            if (content.classList.contains('active')) {
+                                content.classList.remove('active');
+                                content.style.display = 'none';
+                                console.log('Debug: Hiding dropdown menu');
+                            } else {
+                                // Close all other dropdowns first
+                                document.querySelectorAll('.data-menu-content').forEach(menu => {
+                                    menu.classList.remove('active');
+                                    menu.style.display = 'none';
+                                });
+                                
+                                // Show this dropdown
+                                content.classList.add('active');
+                                content.style.display = 'block';
+                                console.log('Debug: Showing dropdown menu');
+                            }
+                        }
+                        
+                        // Add click event listener to document to close menus when clicking elsewhere
+                        document.addEventListener('click', function(event) {
+                            const isMenuClick = event.target.closest('.data-menu');
+                            if (!isMenuClick) {
+                                document.querySelectorAll('.data-menu-content').forEach(menu => {
+                                    menu.classList.remove('active');
+                                    menu.style.display = 'none';
+                                });
+                            }
+                        });
+                        
+                        // Make sure the document is loaded before attaching listeners
+                        document.addEventListener('DOMContentLoaded', function() {
+                            console.log('Debug: DOMContentLoaded event fired, setting up event handlers');
+                            
+                            // Add click handlers to all data-menu buttons
+                            document.querySelectorAll('.dropbtn').forEach(button => {
+                                const menuId = button.getAttribute('data-menu-id');
+                                if (menuId) {
+                                    button.addEventListener('click', function(event) {
+                                        toggleDataMenu(event, menuId);
+                                    });
+                                }
+                            });
+                        });
+                        
                         function handleStatClick(statType, homeId, awayId, homeTeam, awayTeam) {
                             console.log('Debug: handleStatClick called with:', {
                                 statType: statType,
@@ -1440,33 +1788,63 @@ if standings:
                                 awayTeam: awayTeam
                             });
                             
-                            // Send data to Streamlit using documented message format
-                            const message = {
-                                type: 'streamlit:setComponentValue',
-                                value: {
-                                    stat_type: statType,
-                                    home_id: homeId,
-                                    away_id: awayId,
-                                    home_team: homeTeam,
-                                    away_team: awayTeam
-                                }
-                            };
-                            
-                            console.log('Debug: Sending message to Streamlit:', message);
-                            window.parent.postMessage(message, '*');
-                            
-                            // Add a visual feedback
-                            console.log('Debug: Message sent to Streamlit');
+                            try {
+                                // Create a notification element
+                                const notification = document.createElement('div');
+                                notification.style.position = 'fixed';
+                                notification.style.top = '20px';
+                                notification.style.left = '50%';
+                                notification.style.transform = 'translateX(-50%)';
+                                notification.style.backgroundColor = '#4CAF50';
+                                notification.style.color = 'white';
+                                notification.style.padding = '10px 20px';
+                                notification.style.borderRadius = '5px';
+                                notification.style.zIndex = '9999';
+                                notification.style.fontWeight = 'bold';
+                                notification.textContent = 'Loading ' + statType + ' data...';
+                                document.body.appendChild(notification);
+                                
+                                // Reset select element to default option
+                                setTimeout(() => {
+                                    const selects = document.querySelectorAll('.data-select');
+                                    selects.forEach(select => {
+                                        select.selectedIndex = 0;
+                                    });
+                                }, 100);
+                                
+                                // Send data to Streamlit using documented message format
+                                const message = {
+                                    type: 'streamlit:setComponentValue',
+                                    value: {
+                                        stat_type: statType,
+                                        home_id: homeId,
+                                        away_id: awayId,
+                                        home_team: homeTeam,
+                                        away_team: awayTeam
+                                    }
+                                };
+                                
+                                console.log('Debug: Sending message to Streamlit:', message);
+                                window.parent.postMessage(message, '*');
+                                
+                                // Set timeout to remove notification
+                                setTimeout(() => {
+                                    document.body.removeChild(notification);
+                                }, 3000);
+                                
+                                console.log('Debug: Message sent to Streamlit successfully');
+                                return false; 
+                            } catch (error) {
+                                console.error('Error in handleStatClick:', error);
+                                alert('Error processing click: ' + error.message);
+                                return false;
+                            }
                         }
                     </script>
                     """
                     
                     # Use components.html instead of markdown to render the HTML
-                    components.html(table_html + fixture_rows_html + "</tbody></table></div>", height=600, scrolling=True)
-
-# Let's add JavaScript to dynamically adjust height based on screen size
-                    # Use components.html instead of markdown to render the HTML
-                    html_content = table_html + fixture_rows_html + """
+                    components.html(table_html + fixture_rows_html + """
                     </tbody></table></div>
                     <script>
                         // Adjust component height based on screen size
@@ -1510,16 +1888,72 @@ if standings:
                         window.addEventListener('load', adjustComponentHeight);
                         window.addEventListener('resize', adjustComponentHeight);
                     </script>
-                    """
-                    components.html(html_content, height=600, scrolling=True)
+                    """, height=600, scrolling=True)
 
 # Display statistics in sidebar based on selection
 if st.session_state.stats_type and st.session_state.current_fixture:
+    # Automatically expand the sidebar
+    st.sidebar.markdown('<script>setTimeout(function() { document.querySelector("[data-testid=\'stSidebar\']").click(); }, 500);</script>', unsafe_allow_html=True)
+    
     with st.sidebar:
+        st.markdown("### Close")
+        if st.button("✕", key="close_sidebar"):
+            st.session_state.stats_type = None
+            st.session_state.current_fixture = None
+            st.rerun()
+            
         fixture = st.session_state.current_fixture
         print(f"Debug: Current fixture: {fixture}")
         
-        if st.session_state.stats_type == "form":
+        if st.session_state.stats_type == "cards":
+            st.markdown("### Cards Analysis")
+            st.markdown(f"#### {fixture['home_team']} vs {fixture['away_team']}")
+            
+            st.info("Loading cards data for this fixture...")
+            
+            # Display cards information for both teams
+            col1, col2 = st.columns(2)
+            with col1:
+                st.markdown(f"**{fixture['home_team']} Cards**")
+                st.dataframe(pd.DataFrame({
+                    "Card Type": ["Yellow", "Red", "Total"],
+                    "Season Avg": ["1.8", "0.2", "2.0"]
+                }))
+            
+            with col2:
+                st.markdown(f"**{fixture['away_team']} Cards**")
+                st.dataframe(pd.DataFrame({
+                    "Card Type": ["Yellow", "Red", "Total"],
+                    "Season Avg": ["2.1", "0.1", "2.2"]
+                }))
+
+        elif st.session_state.stats_type == "goals":
+            st.markdown("### Goals Analysis")
+            st.markdown(f"#### {fixture['home_team']} vs {fixture['away_team']}")
+            
+            st.info("Loading goals data for this fixture...")
+            
+            # Display goals information for both teams
+            col1, col2 = st.columns(2)
+            with col1:
+                st.markdown(f"**{fixture['home_team']} Goals**")
+                st.dataframe(pd.DataFrame({
+                    "Goals": ["Scored", "Conceded"],
+                    "Home": ["1.8", "0.9"],
+                    "Away": ["1.3", "1.2"],
+                    "Total": ["1.6", "1.0"]
+                }))
+            
+            with col2:
+                st.markdown(f"**{fixture['away_team']} Goals**")
+                st.dataframe(pd.DataFrame({
+                    "Goals": ["Scored", "Conceded"],
+                    "Home": ["1.7", "0.8"],
+                    "Away": ["1.2", "1.4"],
+                    "Total": ["1.5", "1.1"]
+                }))
+            
+        elif st.session_state.stats_type == "form":
             st.markdown("### Team Form Analysis")
             st.markdown(f"#### {fixture['home_team']} vs {fixture['away_team']}")
             
@@ -1549,6 +1983,87 @@ if st.session_state.stats_type and st.session_state.current_fixture:
                 st.dataframe(pd.DataFrame(h2h_data), hide_index=True)
             else:
                 st.info("No head-to-head data available.")
+
+        elif st.session_state.stats_type == "players":
+            st.markdown("### Player Information")
+            st.markdown(f"#### {fixture['home_team']} vs {fixture['away_team']}")
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                st.markdown(f"**{fixture['home_team']} Players**")
+                home_players = fetch_players(fixture['home_id'])
+                if home_players:
+                    st.dataframe(pd.DataFrame(home_players), hide_index=True)
+                else:
+                    st.info("No player information available.")
+            
+            with col2:
+                st.markdown(f"**{fixture['away_team']} Players**")
+                away_players = fetch_players(fixture['away_id'])
+                if away_players:
+                    st.dataframe(pd.DataFrame(away_players), hide_index=True)
+                else:
+                    st.info("No player information available.")
+
+        elif st.session_state.stats_type == "stats":
+            st.markdown("### Team Statistics")
+            st.markdown(f"#### {fixture['home_team']} vs {fixture['away_team']}")
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                st.markdown(f"**{fixture['home_team']} Statistics**")
+                # Use default league_id if not available
+                league_id = 39  # Default to Premier League
+                home_stats = fetch_team_statistics(fixture['home_id'], league_id)
+                if home_stats:
+                    st.dataframe(pd.DataFrame([home_stats]), hide_index=True)
+                else:
+                    st.info("No statistics available.")
+            
+            with col2:
+                st.markdown(f"**{fixture['away_team']} Statistics**")
+                away_stats = fetch_team_statistics(fixture['away_id'], league_id)
+                if away_stats:
+                    st.dataframe(pd.DataFrame([away_stats]), hide_index=True)
+                else:
+                    st.info("No statistics available.")
+
+        elif st.session_state.stats_type == "lineups":
+            st.markdown("### Team Lineups")
+            st.markdown(f"#### {fixture['home_team']} vs {fixture['away_team']}")
+            
+            # We need a fixture ID for this, which we might not have
+            st.info("Lineup information is only available once a match is scheduled with a fixture ID.")
+            
+        elif st.session_state.stats_type == "venue":
+            st.markdown("### Venue Information")
+            st.markdown(f"#### {fixture['home_team']} vs {fixture['away_team']}")
+            
+            # We need venue info for this
+            st.info("Venue information is only available once a match is scheduled with venue details.")
+            
+        elif st.session_state.stats_type == "injuries":
+            st.markdown("### Team Injuries")
+            st.markdown(f"#### {fixture['home_team']} vs {fixture['away_team']}")
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                st.markdown(f"**{fixture['home_team']} Injuries**")
+                # Use default league_id if not available
+                league_id = 39  # Default to Premier League
+                home_injuries = fetch_injuries(fixture['home_id'], league_id)
+                if home_injuries:
+                    st.dataframe(pd.DataFrame(home_injuries), hide_index=True)
+                else:
+                    st.info("No injury information available.")
+            
+            with col2:
+                st.markdown(f"**{fixture['away_team']} Injuries**")
+                away_injuries = fetch_injuries(fixture['away_id'], league_id)
+                if away_injuries:
+                    st.dataframe(pd.DataFrame(away_injuries), hide_index=True)
+                else:
+                    st.info("No injury information available.")
         
         elif st.session_state.stats_type == "more":
             st.markdown("### Additional Statistics")
@@ -1562,8 +2077,7 @@ if st.session_state.stats_type and st.session_state.current_fixture:
                     "Lineups",
                     "Venue Information",
                     "Injuries",
-                    "Weather",
-                    "Referee Information"
+                    "Team Form"
                 ]
             )
             
@@ -1572,6 +2086,8 @@ if st.session_state.stats_type and st.session_state.current_fixture:
                 col1, col2 = st.columns(2)
                 with col1:
                     st.markdown(f"**{fixture['home_team']}**")
+                    # Use default league_id if not available
+                    league_id = 39  # Default to Premier League
                     home_stats = fetch_team_statistics(fixture['home_id'], league_id)
                     if home_stats:
                         st.dataframe(pd.DataFrame([home_stats]), hide_index=True)
@@ -2131,4 +2647,175 @@ st.markdown("", unsafe_allow_html=True)
 # - Event listeners for fixture selection
 # - Functions for displaying team form and head-to-head data
 
-# End of file
+# Add JavaScript for tab navigation
+st.markdown("""
+    <script>
+        // Function to scroll tabs
+        function scrollTabs(direction) {
+            const tabsContainer = document.querySelector('.stTabs [data-testid="stVerticalBlock"]');
+            if (tabsContainer) {
+                const scrollAmount = 200; // Adjust this value to control scroll distance
+                tabsContainer.scrollBy({
+                    left: direction * scrollAmount,
+                    behavior: 'smooth'
+                });
+            }
+        }
+
+        // Add navigation buttons
+        function addTabNavigation() {
+            const tabsContainer = document.querySelector('.stTabs [data-testid="stVerticalBlock"]');
+            if (tabsContainer) {
+                // Remove existing buttons if any
+                const existingButtons = document.querySelectorAll('.tab-nav-button');
+                existingButtons.forEach(button => button.remove());
+
+                // Create left button
+                const leftButton = document.createElement('button');
+                leftButton.className = 'tab-nav-button tab-nav-left';
+                leftButton.innerHTML = '←';
+                leftButton.onclick = () => scrollTabs(-1);
+                
+                // Create right button
+                const rightButton = document.createElement('button');
+                rightButton.className = 'tab-nav-button tab-nav-right';
+                rightButton.innerHTML = '→';
+                rightButton.onclick = () => scrollTabs(1);
+                
+                // Add buttons to document body
+                document.body.appendChild(leftButton);
+                document.body.appendChild(rightButton);
+
+                // Show/hide buttons based on scroll position
+                tabsContainer.addEventListener('scroll', () => {
+                    const showLeft = tabsContainer.scrollLeft > 0;
+                    const showRight = tabsContainer.scrollLeft < (tabsContainer.scrollWidth - tabsContainer.clientWidth);
+                    
+                    leftButton.style.display = showLeft ? 'flex' : 'none';
+                    rightButton.style.display = showRight ? 'flex' : 'none';
+                });
+
+                // Initial check for button visibility
+                leftButton.style.display = tabsContainer.scrollLeft > 0 ? 'flex' : 'none';
+                rightButton.style.display = tabsContainer.scrollLeft < (tabsContainer.scrollWidth - tabsContainer.clientWidth) ? 'flex' : 'none';
+            }
+        }
+
+        // Run when the page loads
+        window.addEventListener('load', addTabNavigation);
+        
+        // Also run when Streamlit reruns
+        document.addEventListener('DOMContentLoaded', addTabNavigation);
+
+        // Run after a short delay to ensure elements are loaded
+        setTimeout(addTabNavigation, 1000);
+    </script>
+""", unsafe_allow_html=True)
+
+# Add tab navigation
+st.markdown("""
+    <style>
+        .stTabs [data-testid="stVerticalBlock"] {
+            overflow-x: auto !important;
+            scrollbar-width: none !important;
+            -ms-overflow-style: none !important;
+        }
+        .stTabs [data-testid="stVerticalBlock"]::-webkit-scrollbar {
+            display: none !important;
+        }
+        .tab-nav-button {
+            position: fixed !important;
+            top: 50% !important;
+            transform: translateY(-50%) !important;
+            background-color: rgba(0, 0, 0, 0.8) !important;
+            color: white !important;
+            border: none !important;
+            padding: 10px !important;
+            cursor: pointer !important;
+            z-index: 9999 !important;
+            border-radius: 50% !important;
+            width: 40px !important;
+            height: 40px !important;
+            display: flex !important;
+            align-items: center !important;
+            justify-content: center !important;
+            font-size: 20px !important;
+            transition: background-color 0.3s !important;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.2) !important;
+        }
+        .tab-nav-button:hover {
+            background-color: rgba(0, 0, 0, 0.9) !important;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.3) !important;
+        }
+        .tab-nav-left {
+            left: 10px !important;
+        }
+        .tab-nav-right {
+            right: 10px !important;
+        }
+    </style>
+    <script>
+        function scrollTabs(direction) {
+            const tabsContainer = document.querySelector('.stTabs [data-testid="stVerticalBlock"]');
+            if (tabsContainer) {
+                const scrollAmount = 200;
+                tabsContainer.scrollBy({
+                    left: direction * scrollAmount,
+                    behavior: 'smooth'
+                });
+            }
+        }
+
+        function addTabNavigation() {
+            const tabsContainer = document.querySelector('.stTabs [data-testid="stVerticalBlock"]');
+            if (tabsContainer) {
+                // Remove existing buttons if any
+                const existingButtons = document.querySelectorAll('.tab-nav-button');
+                existingButtons.forEach(button => button.remove());
+
+                // Create left button
+                const leftButton = document.createElement('button');
+                leftButton.className = 'tab-nav-button tab-nav-left';
+                leftButton.innerHTML = '←';
+                leftButton.onclick = () => scrollTabs(-1);
+                
+                // Create right button
+                const rightButton = document.createElement('button');
+                rightButton.className = 'tab-nav-button tab-nav-right';
+                rightButton.innerHTML = '→';
+                rightButton.onclick = () => scrollTabs(1);
+                
+                // Add buttons to document body
+                document.body.appendChild(leftButton);
+                document.body.appendChild(rightButton);
+
+                // Show/hide buttons based on scroll position
+                tabsContainer.addEventListener('scroll', () => {
+                    const showLeft = tabsContainer.scrollLeft > 0;
+                    const showRight = tabsContainer.scrollLeft < (tabsContainer.scrollWidth - tabsContainer.clientWidth);
+                    
+                    leftButton.style.display = showLeft ? 'flex' : 'none';
+                    rightButton.style.display = showRight ? 'flex' : 'none';
+                });
+
+                // Initial check for button visibility
+                leftButton.style.display = tabsContainer.scrollLeft > 0 ? 'flex' : 'none';
+                rightButton.style.display = tabsContainer.scrollLeft < (tabsContainer.scrollWidth - tabsContainer.clientWidth) ? 'flex' : 'none';
+            }
+        }
+
+        // Run when the page loads
+        window.addEventListener('load', addTabNavigation);
+        
+        // Also run when Streamlit reruns
+        document.addEventListener('DOMContentLoaded', addTabNavigation);
+
+        // Run after a short delay to ensure elements are loaded
+        setTimeout(addTabNavigation, 1000);
+    </script>
+""", unsafe_allow_html=True)
+
+# Create the tabs
+league_tabs = st.tabs(LEAGUES.keys())
+
+# ... existing code ...
