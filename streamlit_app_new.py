@@ -37,32 +37,7 @@ from lib.fetch_fixtures import (
     api_football_request
 )
 import random
-from lib.predictions import predict_match, create_fallback_prediction
-
-# Add prediction caching to minimize API calls
-def get_cached_prediction(home_team_id, away_team_id, league_id):
-    """Get prediction for a match, using cached results if available"""
-    # Create a unique key for this prediction
-    cache_key = f"prediction_{home_team_id}_{away_team_id}_{league_id}"
-    
-    # Check if we already have this prediction cached in session state
-    if 'prediction_cache' not in st.session_state:
-        st.session_state.prediction_cache = {}
-        
-    if cache_key in st.session_state.prediction_cache:
-        return st.session_state.prediction_cache[cache_key]
-    
-    # If not cached, calculate the prediction
-    try:
-        prediction = predict_match(home_team_id, away_team_id, league_id)
-        st.session_state.prediction_cache[cache_key] = prediction
-        return prediction
-    except Exception as e:
-        print(f"Error calculating prediction: {e}")
-        # Return fallback prediction if real prediction fails
-        fallback = create_fallback_prediction()
-        st.session_state.prediction_cache[cache_key] = fallback
-        return fallback
+from lib.predictions import predict_match, create_fallback_prediction, get_cached_prediction
 
 # Add a helper function for predicted result
 def get_predicted_result(home_team_id, away_team_id, league_id):
@@ -463,57 +438,167 @@ def hash_password(password):
     """Create a hashed password using bcrypt"""
     return bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
 
-# Set page config (must be the first Streamlit command)
-st.set_page_config(
-    page_title="MyBetBuddy - Football Match Predictions", 
-    page_icon="⚽", 
-    layout="wide",
-    initial_sidebar_state="collapsed"  # Start with sidebar collapsed
-)
-
-# Add custom CSS to reduce top padding
-st.markdown("""
-    <style>
-    /* Reduce top padding */
-    .main > div:first-child {
-        padding-top: 1rem !important;
-    }
-    
-    /* Remove extra padding from header block */
-    .block-container {
-        padding-top: 1rem !important;
-        padding-bottom: 0rem !important;
-    }
-    
-    /* Adjust header margins */
-    header {
-        margin-bottom: 0rem !important;
-    }
-    
-    /* Hide Streamlit's default header decoration */
-    .decoration {
-        display: none !important;
-    }
-    
-    /* Reduce padding for the main content area */
-    .stApp > header + div {
-        padding-top: 1rem !important;
-    }
-    
-    /* Reduce gap between elements */
-    .element-container {
-        margin-bottom: 0.5rem !important;
-    }
-    </style>
-""", unsafe_allow_html=True)
-
-# Initialize session state for statistics
+# Initialize all session state variables at the start
+if 'authenticated' not in st.session_state:
+    st.session_state.authenticated = False
+if 'username' not in st.session_state:
+    st.session_state.username = None
+if 'selected_fixtures' not in st.session_state:
+    st.session_state.selected_fixtures = []
+if 'show_register' not in st.session_state:
+    st.session_state.show_register = False
 if 'stats_type' not in st.session_state:
     st.session_state.stats_type = None
 if 'current_fixture' not in st.session_state:
     st.session_state.current_fixture = None
 if 'component_value' not in st.session_state:
     st.session_state.component_value = None
+if 'analysis_data' not in st.session_state:
+    st.session_state.analysis_data = {}
+if 'analysis_selections' not in st.session_state:
+    st.session_state.analysis_selections = {}
+if 'show_analysis' not in st.session_state:
+    st.session_state.show_analysis = False
+if 'show_instructions' not in st.session_state:
+    st.session_state.show_instructions = False
+if 'prediction_cache' not in st.session_state:
+    st.session_state.prediction_cache = {}
+
+# Set page config (must be the first Streamlit command)
+st.set_page_config(
+    page_title="MyBetBuddy - Football Match Predictions", 
+    page_icon="⚽", 
+    layout="wide",
+    initial_sidebar_state="collapsed"
+)
+
+# Add all CSS styles in one block at the start of the file
+st.markdown("""
+    <style>
+    /* Global styles */
+    .stApp {
+        background-color: #000 !important;
+        color: #fff !important;
+        font-size: 16px !important;
+    }
+    
+    /* Header styles */
+    .header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 1rem;
+    }
+    
+    /* Main content area */
+    .main .block-container {
+        background-color: #000 !important;
+        color: #fff !important;
+        padding: 1rem !important;
+    }
+    
+    /* Headers */
+    h1, h2, h3, h4, h5, h6, .st-emotion-cache-10trblm {
+        color: #fff !important;
+        font-size: 130% !important;
+    }
+    
+    /* League tabs styling */
+    .st-emotion-cache-1oe5cao, .st-emotion-cache-13ejsyy, [data-testid="stHorizontalBlock"] .st-emotion-cache-ocqkz7 {
+        color: #fff !important;
+        font-size: 18px !important;
+        font-weight: 700 !important;
+    }
+    
+    /* Tab navigation */
+    .stTabs [data-testid="stHorizontalBlock"] {
+        overflow-x: auto !important;
+        white-space: nowrap !important;
+        padding: 0 10px !important;
+        margin: 0 -10px !important;
+        scrollbar-width: thin !important;
+        scrollbar-color: #444 #222 !important;
+    }
+    
+    /* Navigation buttons */
+    .tab-nav-button {
+        position: fixed !important;
+        top: 50% !important;
+        transform: translateY(-50%) !important;
+        background-color: rgba(0, 0, 0, 0.8) !important;
+        color: white !important;
+        border: none !important;
+        padding: 10px !important;
+        cursor: pointer !important;
+        z-index: 9999 !important;
+        border-radius: 50% !important;
+        width: 40px !important;
+        height: 40px !important;
+        display: flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+        font-size: 20px !important;
+        transition: background-color 0.3s !important;
+        box-shadow: 0 2px 5px rgba(0,0,0,0.2) !important;
+    }
+    
+    /* Selected fixtures table */
+    .selected-fixtures-table {
+        width: 100%;
+        border-collapse: collapse;
+        margin-bottom: 1rem;
+        border: 1px solid #333;
+        background-color: #000;
+        color: #fff;
+    }
+    
+    .selected-fixtures-table th {
+        background-color: #000;
+        color: #ccc;
+        padding: 8px;
+        text-align: center;
+        border: 1px solid #333;
+    }
+    
+    .selected-fixtures-table td {
+        padding: 8px;
+        vertical-align: middle;
+        border: 1px solid #333;
+        color: #fff;
+    }
+    
+    .selected-fixtures-table tr:hover {
+        background-color: #111;
+    }
+    
+    /* Mobile responsive styles */
+    @media (max-width: 768px) {
+        .header {
+            flex-direction: column !important;
+            align-items: center !important;
+            text-align: center !important;
+        }
+        
+        .header h1 {
+            margin-bottom: 10px !important;
+            font-size: 24px !important;
+        }
+        
+        [data-testid="column"]:last-child {
+            margin-top: 10px !important;
+        }
+        
+        .fixtures-container {
+            max-height: 400px !important;
+        }
+        
+        .fixtures-table th, .fixtures-table td {
+            padding: 6px !important;
+            font-size: 14px !important;
+        }
+    }
+    </style>
+""", unsafe_allow_html=True)
 
 # Process component value immediately when received (as per docs)
 if 'component_value' in st.session_state and st.session_state.component_value is not None:
@@ -2704,168 +2789,55 @@ st.markdown("", unsafe_allow_html=True)
 # Add JavaScript for tab navigation
 st.markdown("""
     <script>
-        // Function to scroll tabs
-        function scrollTabs(direction) {
-            const tabsContainer = document.querySelector('.stTabs [data-testid="stVerticalBlock"]');
-            if (tabsContainer) {
-                const scrollAmount = 200; // Adjust this value to control scroll distance
-                tabsContainer.scrollBy({
-                    left: direction * scrollAmount,
-                    behavior: 'smooth'
-                });
-            }
+    // Tab navigation functions
+    function scrollTabs(direction) {
+        const tabsContainer = document.querySelector('.stTabs [data-testid="stHorizontalBlock"]');
+        if (tabsContainer) {
+            const scrollAmount = 200;
+            tabsContainer.scrollBy({
+                left: direction * scrollAmount,
+                behavior: 'smooth'
+            });
         }
+    }
 
-        // Add navigation buttons
-        function addTabNavigation() {
-            const tabsContainer = document.querySelector('.stTabs [data-testid="stVerticalBlock"]');
-            if (tabsContainer) {
-                // Remove existing buttons if any
-                const existingButtons = document.querySelectorAll('.tab-nav-button');
-                existingButtons.forEach(button => button.remove());
+    function addTabNavigation() {
+        const tabsContainer = document.querySelector('.stTabs [data-testid="stHorizontalBlock"]');
+        if (tabsContainer) {
+            // Remove existing buttons
+            document.querySelectorAll('.tab-nav-button').forEach(button => button.remove());
 
-                // Create left button
-                const leftButton = document.createElement('button');
-                leftButton.className = 'tab-nav-button tab-nav-left';
-                leftButton.innerHTML = '←';
-                leftButton.onclick = () => scrollTabs(-1);
-                
-                // Create right button
-                const rightButton = document.createElement('button');
-                rightButton.className = 'tab-nav-button tab-nav-right';
-                rightButton.innerHTML = '→';
-                rightButton.onclick = () => scrollTabs(1);
-                
-                // Add buttons to document body
-                document.body.appendChild(leftButton);
-                document.body.appendChild(rightButton);
+            // Create navigation buttons
+            const leftButton = document.createElement('button');
+            leftButton.className = 'tab-nav-button tab-nav-left';
+            leftButton.innerHTML = '←';
+            leftButton.onclick = () => scrollTabs(-1);
+            
+            const rightButton = document.createElement('button');
+            rightButton.className = 'tab-nav-button tab-nav-right';
+            rightButton.innerHTML = '→';
+            rightButton.onclick = () => scrollTabs(1);
+            
+            document.body.appendChild(leftButton);
+            document.body.appendChild(rightButton);
 
-                // Show/hide buttons based on scroll position
-                tabsContainer.addEventListener('scroll', () => {
-                    const showLeft = tabsContainer.scrollLeft > 0;
-                    const showRight = tabsContainer.scrollLeft < (tabsContainer.scrollWidth - tabsContainer.clientWidth);
-                    
-                    leftButton.style.display = showLeft ? 'flex' : 'none';
-                    rightButton.style.display = showRight ? 'flex' : 'none';
-                });
+            // Handle button visibility
+            const updateButtonVisibility = () => {
+                const showLeft = tabsContainer.scrollLeft > 0;
+                const showRight = tabsContainer.scrollLeft < (tabsContainer.scrollWidth - tabsContainer.clientWidth);
+                leftButton.style.display = showLeft ? 'flex' : 'none';
+                rightButton.style.display = showRight ? 'flex' : 'none';
+            };
 
-                // Initial check for button visibility
-                leftButton.style.display = tabsContainer.scrollLeft > 0 ? 'flex' : 'none';
-                rightButton.style.display = tabsContainer.scrollLeft < (tabsContainer.scrollWidth - tabsContainer.clientWidth) ? 'flex' : 'none';
-            }
+            tabsContainer.addEventListener('scroll', updateButtonVisibility);
+            updateButtonVisibility();
         }
+    }
 
-        // Run when the page loads
-        window.addEventListener('load', addTabNavigation);
-        
-        // Also run when Streamlit reruns
-        document.addEventListener('DOMContentLoaded', addTabNavigation);
-
-        // Run after a short delay to ensure elements are loaded
-        setTimeout(addTabNavigation, 1000);
-    </script>
-""", unsafe_allow_html=True)
-
-# Add tab navigation
-st.markdown("""
-    <style>
-        .stTabs [data-testid="stVerticalBlock"] {
-            overflow-x: auto !important;
-            scrollbar-width: none !important;
-            -ms-overflow-style: none !important;
-        }
-        .stTabs [data-testid="stVerticalBlock"]::-webkit-scrollbar {
-            display: none !important;
-        }
-        .tab-nav-button {
-            position: fixed !important;
-            top: 50% !important;
-            transform: translateY(-50%) !important;
-            background-color: rgba(0, 0, 0, 0.8) !important;
-            color: white !important;
-            border: none !important;
-            padding: 10px !important;
-            cursor: pointer !important;
-            z-index: 9999 !important;
-            border-radius: 50% !important;
-            width: 40px !important;
-            height: 40px !important;
-            display: flex !important;
-            align-items: center !important;
-            justify-content: center !important;
-            font-size: 20px !important;
-            transition: background-color 0.3s !important;
-            box-shadow: 0 2px 5px rgba(0,0,0,0.2) !important;
-        }
-        .tab-nav-button:hover {
-            background-color: rgba(0, 0, 0, 0.9) !important;
-            box-shadow: 0 4px 8px rgba(0,0,0,0.3) !important;
-        }
-        .tab-nav-left {
-            left: 10px !important;
-        }
-        .tab-nav-right {
-            right: 10px !important;
-        }
-    </style>
-    <script>
-        function scrollTabs(direction) {
-            const tabsContainer = document.querySelector('.stTabs [data-testid="stVerticalBlock"]');
-            if (tabsContainer) {
-                const scrollAmount = 200;
-                tabsContainer.scrollBy({
-                    left: direction * scrollAmount,
-                    behavior: 'smooth'
-                });
-            }
-        }
-
-        function addTabNavigation() {
-            const tabsContainer = document.querySelector('.stTabs [data-testid="stVerticalBlock"]');
-            if (tabsContainer) {
-                // Remove existing buttons if any
-                const existingButtons = document.querySelectorAll('.tab-nav-button');
-                existingButtons.forEach(button => button.remove());
-
-                // Create left button
-                const leftButton = document.createElement('button');
-                leftButton.className = 'tab-nav-button tab-nav-left';
-                leftButton.innerHTML = '←';
-                leftButton.onclick = () => scrollTabs(-1);
-                
-                // Create right button
-                const rightButton = document.createElement('button');
-                rightButton.className = 'tab-nav-button tab-nav-right';
-                rightButton.innerHTML = '→';
-                rightButton.onclick = () => scrollTabs(1);
-                
-                // Add buttons to document body
-                document.body.appendChild(leftButton);
-                document.body.appendChild(rightButton);
-
-                // Show/hide buttons based on scroll position
-                tabsContainer.addEventListener('scroll', () => {
-                    const showLeft = tabsContainer.scrollLeft > 0;
-                    const showRight = tabsContainer.scrollLeft < (tabsContainer.scrollWidth - tabsContainer.clientWidth);
-                    
-                    leftButton.style.display = showLeft ? 'flex' : 'none';
-                    rightButton.style.display = showRight ? 'flex' : 'none';
-                });
-
-                // Initial check for button visibility
-                leftButton.style.display = tabsContainer.scrollLeft > 0 ? 'flex' : 'none';
-                rightButton.style.display = tabsContainer.scrollLeft < (tabsContainer.scrollWidth - tabsContainer.clientWidth) ? 'flex' : 'none';
-            }
-        }
-
-        // Run when the page loads
-        window.addEventListener('load', addTabNavigation);
-        
-        // Also run when Streamlit reruns
-        document.addEventListener('DOMContentLoaded', addTabNavigation);
-
-        // Run after a short delay to ensure elements are loaded
-        setTimeout(addTabNavigation, 1000);
+    // Initialize tab navigation
+    window.addEventListener('load', addTabNavigation);
+    document.addEventListener('DOMContentLoaded', addTabNavigation);
+    setTimeout(addTabNavigation, 1000);
     </script>
 """, unsafe_allow_html=True)
 

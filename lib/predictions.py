@@ -736,7 +736,7 @@ def analyze_head_to_head(h2h_matches: List[Dict], team1_id: int, team2_id: int) 
         },
         'confidence': 'high' if total_matches >= 5 else 'medium' if total_matches >= 3 else 'low',
         'matches_analyzed': total_matches
-    }
+    } 
     
     # Cache the h2h stats
     cache.set('h2h_stats', cache_params, h2h_stats)
@@ -1978,46 +1978,40 @@ def calculate_under_probability(expected: float, threshold: float) -> float:
     return float(poisson.cdf(threshold, expected))
 
 def predict_batch_matches(fixtures: List[Dict], max_workers: int = 3) -> List[Dict]:
-    """
-    Predict multiple matches in parallel with rate limiting.
-    
-    Args:
-        fixtures: List of dictionaries containing fixture information
-                 Each dict should have: home_team_id, away_team_id, league_id
-        max_workers: Maximum number of parallel predictions
-        
-    Returns:
-        List of prediction results
-    """
+    """Predict multiple matches in parallel with improved caching"""
     results = []
-    rate_limit_delay = 0.5  # 500ms between API calls
     
     def predict_single_match(fixture):
         try:
-            # Add rate limiting
-            time.sleep(rate_limit_delay)
+            # Try to get cached prediction first with 7-day duration
+            cached = cache.get('predictions', {
+                'home_team_id': fixture['home_team_id'],
+                'away_team_id': fixture['away_team_id'],
+                'league_id': fixture['league_id']
+            }, max_age_hours=24 * 7)
             
-            # Use simple prediction for better performance
-            result = simple_predict_match(
+            if cached:
+                return cached
+                
+            # If no cache, calculate new prediction
+            result = predict_match(
                 fixture['home_team_id'],
                 fixture['away_team_id'],
                 fixture['league_id']
             )
             
-            # Add fixture information to result
-            result['fixture'] = {
+            # Cache the result with 7-day duration
+            cache.set('predictions', {
                 'home_team_id': fixture['home_team_id'],
                 'away_team_id': fixture['away_team_id'],
                 'league_id': fixture['league_id']
-            }
+            }, result)
             
             return result
-            
         except Exception as e:
-            print(f"Error predicting match: {str(e)}")
+            print(f"ERROR: Failed to predict match {fixture['home_team_id']} vs {fixture['away_team_id']}: {str(e)}")
             return create_fallback_prediction()
     
-    # Use ThreadPoolExecutor for parallel processing
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         results = list(executor.map(predict_single_match, fixtures))
     
@@ -2028,137 +2022,31 @@ _prediction_cache = {}
 _cache_ttl = 60  # Cache for 1 minute
 
 def get_cached_prediction(home_team_id, away_team_id, league_id):
-    """
-    Get a cached prediction for a match, or calculate a new one if not cached.
-    Disables caching on Heroku environments and adds a unique hash value
-    to each prediction to ensure they are not identical.
-    """
-    import os
-    
-    # Detect if running on Heroku (DYNO environment variable is set)
-    is_heroku = os.environ.get('DYNO') is not None
-    print(f"DEBUG: Running on Heroku: {is_heroku}")
-    
+    """Get a cached prediction if available, otherwise calculate a new one"""
     try:
-        # Ensure proper types for all IDs
-        home_id = int(home_team_id)
-        away_id = int(away_team_id)
-        league = int(league_id)
+        # Use the DataCache instance's get method with longer cache duration
+        cached = cache.get('predictions', {
+            'home_team_id': home_team_id,
+            'away_team_id': away_team_id,
+            'league_id': league_id
+        }, max_age_hours=24 * 7)  # Cache for 7 days
         
-        if not all([home_id, away_id, league]):
-            error_msg = f"Invalid team or league ID: {home_id}, {away_id}, {league}"
-            print(f"ERROR: {error_msg}")
-            raise ValueError(error_msg)
-        
-        # On Heroku, don't try to use cache
-        if is_heroku:
-            print(f"DEBUG: Heroku environment detected - bypassing cache for {home_id} vs {away_id}")
+        if cached:
+            print(f"DEBUG: Using cached prediction for {home_team_id} vs {away_team_id}")
+            return cached
             
-            # Use the simple prediction function which is more reliable
-            try:
-                result = simple_predict_match(home_id, away_id, league)
-                print(f"DEBUG: simple_predict_match result: {result['probabilities']}")
-                
-                # Add a uniqueness factor based on team IDs to ensure results are different
-                if 'probabilities' in result:
-                    # Adjust probabilities more significantly based on team IDs
-                    home_factor = (home_id % 100) / 100  # Larger adjustment factor
-                    away_factor = (away_id % 100) / 100  # Larger adjustment factor
-                    
-                    # Create truly unique probabilities
-                    result['probabilities']['home_win'] = min(0.95, max(0.05, 0.3 + home_factor))
-                    result['probabilities']['away_win'] = min(0.95, max(0.05, 0.3 + away_factor))
-                    
-                    # Recalculate draw to ensure probabilities sum to 1
-                    result['probabilities']['draw'] = 1 - result['probabilities']['home_win'] - result['probabilities']['away_win']
-                    
-                    # Ensure draw probability is non-negative
-                    if result['probabilities']['draw'] < 0:
-                        adjust = abs(result['probabilities']['draw']) / 2
-                        result['probabilities']['home_win'] -= adjust
-                        result['probabilities']['away_win'] -= adjust
-                        result['probabilities']['draw'] = 0
-                
-                # Validate result
-                if not result or not isinstance(result, dict):
-                    error_msg = f"Invalid prediction result type: {type(result)}"
-                    print(f"ERROR: {error_msg}")
-                    raise TypeError(error_msg)
-                    
-                return result
-            except Exception as e:
-                error_msg = f"Error in simple prediction on Heroku: {str(e)}"
-                print(f"ERROR: {error_msg}")
-                # Instead of fallback, return the error in the result
-                return {
-                    'probabilities': {
-                        'home_win': 0.33,
-                        'draw': 0.34,
-                        'away_win': 0.33
-                    },
-                    'expected_goals': {
-                        'home': 1.0,
-                        'away': 1.0
-                    },
-                    'metadata': {
-                        'confidence': 'none',
-                        'error': str(e)
-                    },
-                    'debug_info': {
-                        'time': datetime.now().isoformat(),
-                        'is_error': True,
-                        'error': str(e),
-                        'error_location': 'simple_predict_match',
-                        'team_ids': [home_id, away_id],
-                        'league_id': league
-                    }
-                }
+        # If no cache, calculate new prediction
+        print(f"DEBUG: Calculating new prediction for {home_team_id} vs {away_team_id}")
+        result = predict_match(home_team_id, away_team_id, league_id)
         
-        # For local development, use cache
-        # Create a unique cache key
-        cache_key = f"{home_id}_{away_id}_{league}"
-        
-        # Get from cache
-        cached_result = cache.cache_get(cache_key)
-        if cached_result:
-            return cached_result
-        
-        # Call prediction function with proper types
-        result = predict_match(home_id, away_id, league)
-        
-        # Validate result
-        if not result or not isinstance(result, dict):
-            error_msg = f"Invalid prediction result type: {type(result)}"
-            print(f"ERROR: {error_msg}")
-            raise TypeError(error_msg)
-        
-        # Store in cache
-        cache.cache_set(cache_key, result)
+        # Cache the result with 7-day duration
+        cache.set('predictions', {
+            'home_team_id': home_team_id,
+            'away_team_id': away_team_id,
+            'league_id': league_id
+        }, result)
         
         return result
     except Exception as e:
-        error_msg = f"Prediction error in cache function: {str(e)}"
-        print(f"ERROR: {error_msg}")
-        # Return error details instead of fallback
-        return {
-            'probabilities': {
-                'home_win': 0.33,
-                'draw': 0.34,
-                'away_win': 0.33
-            },
-            'expected_goals': {
-                'home': 1.0,
-                'away': 1.0
-            },
-            'metadata': {
-                'confidence': 'none',
-                'error': str(e)
-            },
-            'debug_info': {
-                'time': datetime.now().isoformat(),
-                'is_error': True,
-                'error': str(e),
-                'error_location': 'get_cached_prediction',
-                'traceback': f"{e.__class__.__name__}: {str(e)}"
-            }
-        }
+        print(f"ERROR: Prediction error in cache function: {str(e)}")
+        return create_fallback_prediction()
