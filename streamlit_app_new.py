@@ -471,6 +471,42 @@ st.set_page_config(
     initial_sidebar_state="collapsed"  # Start with sidebar collapsed
 )
 
+# Add custom CSS to reduce top padding
+st.markdown("""
+    <style>
+    /* Reduce top padding */
+    .main > div:first-child {
+        padding-top: 1rem !important;
+    }
+    
+    /* Remove extra padding from header block */
+    .block-container {
+        padding-top: 1rem !important;
+        padding-bottom: 0rem !important;
+    }
+    
+    /* Adjust header margins */
+    header {
+        margin-bottom: 0rem !important;
+    }
+    
+    /* Hide Streamlit's default header decoration */
+    .decoration {
+        display: none !important;
+    }
+    
+    /* Reduce padding for the main content area */
+    .stApp > header + div {
+        padding-top: 1rem !important;
+    }
+    
+    /* Reduce gap between elements */
+    .element-container {
+        margin-bottom: 0.5rem !important;
+    }
+    </style>
+""", unsafe_allow_html=True)
+
 # Initialize session state for statistics
 if 'stats_type' not in st.session_state:
     st.session_state.stats_type = None
@@ -771,6 +807,24 @@ st.markdown("""
         background-color: #000 !important;
         color: #fff !important;
         font-size: 16px !important; /* Base font size +1 */
+    }
+    
+    /* Header responsive styling */
+    @media (max-width: 768px) {
+        .header {
+            flex-direction: column !important;
+            align-items: center !important;
+            text-align: center !important;
+        }
+        
+        .header h1 {
+            margin-bottom: 10px !important;
+            font-size: 24px !important;
+        }
+        
+        [data-testid="column"]:last-child {
+            margin-top: 10px !important;
+        }
     }
     
     /* Main content area */
